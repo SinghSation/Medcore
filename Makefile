@@ -41,23 +41,57 @@ adr-new: ## Scaffold a new ADR (usage: make adr-new TITLE="decide-xyz")
 	 cp docs/adr/000-template.md $$path; \
 	 echo "created $$path"
 
+##@ Applications
+
+.PHONY: api-dev
+api-dev: ## Run the backend API locally (Spring Boot, http://localhost:8080)
+	cd apps/api && ./gradlew bootRun
+
+.PHONY: api-build
+api-build: ## Build the backend API jar
+	cd apps/api && ./gradlew build
+
+.PHONY: api-test
+api-test: ## Run backend tests (JUnit 5)
+	cd apps/api && ./gradlew test
+
+.PHONY: web-install
+web-install: ## Install frontend dependencies (pnpm workspace)
+	pnpm install
+
+.PHONY: web-dev
+web-dev: ## Run the frontend dev server (Vite, http://localhost:5173)
+	cd apps/web && pnpm dev
+
+.PHONY: web-build
+web-build: ## Build the frontend for production
+	cd apps/web && pnpm build
+
+.PHONY: web-test
+web-test: ## Run frontend tests (Vitest + happy-dom)
+	cd apps/web && pnpm test
+
+.PHONY: web-typecheck
+web-typecheck: ## TypeScript typecheck for the frontend
+	cd apps/web && pnpm typecheck
+
 ##@ Quality gates
 
 .PHONY: format
-format: ## Format code across the monorepo (placeholder until apps exist)
-	@echo "format: no applications yet — nothing to format"
+format: ## Format code (formatters not yet wired — will live in packages/config)
+	@echo "format: formatters not yet wired — tracked for packages/config"
 
 .PHONY: lint
-lint: ## Lint code and configuration (placeholder until apps exist)
-	@echo "lint: no applications yet — nothing to lint"
+lint: ## Lint code (linters not yet wired — will live in packages/config)
+	@echo "lint: linters not yet wired — tracked for packages/config"
 
 .PHONY: typecheck
-typecheck: ## Run type checking (placeholder until apps exist)
-	@echo "typecheck: no applications yet — nothing to typecheck"
+typecheck: web-typecheck ## Run type checking across apps
+	@echo "typecheck: OK"
 
 .PHONY: test
-test: ## Run unit and integration tests (placeholder until apps exist)
-	@echo "test: no applications yet — nothing to test"
+test: api-test web-test ## Run unit and integration tests across apps
+	@echo "test: OK"
 
 .PHONY: test-contract
 test-contract: ## Run contract / schema conformance tests

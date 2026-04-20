@@ -51,6 +51,10 @@ venv/
 target/
 .gradle/
 
+# Gradle wrapper jars are explicitly tracked — they are part of the wrapper
+# contract that makes ./gradlew self-bootstrap on a fresh clone.
+!**/gradle/wrapper/gradle-wrapper.jar
+
 # --- Go ----------------------------------------------------------------------
 bin/
 *.test

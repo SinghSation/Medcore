@@ -1,0 +1,17 @@
+{
+  "name": "medcore-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Medcore — enterprise-grade, AI-governed EHR platform. Monorepo root.",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @medcore/web dev",
+    "build:web": "pnpm --filter @medcore/web build",
+    "test:web": "pnpm --filter @medcore/web test",
+    "typecheck:web": "pnpm --filter @medcore/web typecheck"
+  }
+}

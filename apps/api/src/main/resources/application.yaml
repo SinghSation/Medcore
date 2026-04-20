@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: medcore-api
+
+server:
+  port: 8080
+  shutdown: graceful
