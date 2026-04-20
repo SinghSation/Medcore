@@ -108,6 +108,18 @@ phi-fixtures/
 *.ccd
 *.ccr
 
+# --- Local database dumps & backups (NEVER COMMIT) ---------------------------
+# Never commit a production database dump. Even dev / test dumps often
+# contain synthetic-but-realistic fixtures that belong in a reviewed location.
+# Note: *.sql is intentionally NOT ignored — Flyway migrations must be tracked.
+*.dump
+*.pgdump
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+*.backup
+pgdump-*/
+
 # --- Logs --------------------------------------------------------------------
 logs/
 *.log

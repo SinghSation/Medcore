@@ -1,0 +1,42 @@
+# -----------------------------------------------------------------------------
+# Medcore — local services
+#
+# Developer-workstation compose. NOT production configuration. Production
+# infrastructure lives in infra/terraform/ (ADR-001 §6).
+#
+# At Phase 3A Step 1 this file defines PostgreSQL only. Additional services
+# (mock OIDC, etc.) land in later steps under their own ADRs.
+#
+# Usage:
+#   1. Create a .env file at the repo root (gitignored). Minimum content:
+#        POSTGRES_PASSWORD=<choose-a-local-password>
+#   2. docker compose up -d postgres
+#   3. docker compose ps   — postgres should report "healthy" within ~20s.
+#
+# See docs/runbooks/local-services.md for the full operator guide.
+# -----------------------------------------------------------------------------
+
+services:
+  postgres:
+    image: postgres:16.4
+    container_name: medcore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-medcore}
+      POSTGRES_DB: ${POSTGRES_DB:-medcore_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env or the environment}
+      PGTZ: UTC
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
