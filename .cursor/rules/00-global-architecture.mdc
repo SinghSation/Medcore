@@ -1,0 +1,103 @@
+---
+description: Global architectural invariants for Medcore. Applies to every file in the repository.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Rule 00 — Global Architecture (alwaysApply)
+
+This rule is the global architectural constraint for Medcore. It binds every
+file. When this rule conflicts with another rule, the stricter rule wins.
+
+## Precedence
+
+Authority order (highest first):
+
+1. Applicable law and regulation.
+2. `AGENTS.md`.
+3. `docs/architecture/medcore_architecture_charter.md`.
+4. Accepted ADRs under `docs/adr/`.
+5. This rule and sibling `.cursor/rules/*.mdc` rules.
+6. Existing code.
+7. Session instructions.
+
+If a conflict cannot be reconciled, the assistant MUST halt and ask.
+
+## Repository shape
+
+- The top-level directory layout defined in `AGENTS.md` is **frozen**. New
+  top-level directories REQUIRE an ADR.
+- `apps/` holds deployable applications. `packages/` holds shared libraries.
+  `infra/` holds infrastructure-as-code. `docs/` is the governance record.
+- Feature code MUST NOT be placed in `scripts/`, `infra/`, or `docs/`.
+
+## Architectural style
+
+- Medcore is a **modular monolith with strict internal boundaries**. Premature
+  microservices are prohibited.
+- Each module owns its own persistence, contract, and audit stream. Cross-
+  module database access is prohibited — modules communicate through typed
+  contracts from `packages/schemas/`.
+- Any new module MUST follow `.claude/skills/new-module.md`.
+
+## Dependencies
+
+- A new runtime dependency REQUIRES an ADR when it (a) is not already in use
+  in the repository, (b) introduces a non-permissive license, (c) runs
+  native code, or (d) has fewer than 500 weekly downloads.
+- Dev-only dependencies follow the same rule when they touch the security
+  pipeline (linters of linters, secret scanners, policy engines).
+
+## Reversibility
+
+- Schema migrations, infra changes, and rollouts MUST be reversible. If they
+  cannot be, document the rollback strategy in the ADR.
+
+## Forbidden patterns
+
+- Business logic in controllers, routers, or UI components.
+- Direct database access from the UI layer.
+- Shared mutable globals across modules.
+- "God" modules (utilities, helpers, misc) — name intent, not shape.
+- Copy-pasted contract definitions outside `packages/schemas/`.
+
+## Git commit and push authority
+
+Git authority is governed by `AGENTS.md` §4.7 (local commits) and §4.8
+(remote / destructive operations). In summary:
+
+- Agents MUST NOT run `git commit` without the explicit session phrase
+  **"approved to commit"** AND full satisfaction of every condition in
+  `AGENTS.md` §4.7.
+- Agents MUST NOT run `git push`, any `--force` variant,
+  `git commit --amend`, `git rebase`, `git merge`, `git tag`, any
+  branch deletion, or any history-rewriting reset without the explicit
+  session phrase **"approved to push"**.
+- Approval phrases are **single-use** and scoped to the operation under
+  discussion. They do not authorize any later operation in the same
+  session, even if similar.
+- Commits touching **high-risk areas** (authentication, authorization,
+  audit logging, database migrations, infrastructure / Terraform,
+  dependency changes, encryption / secrets, PHI-handling paths,
+  FHIR / interoperability contracts, or governance files) REQUIRE an
+  explicit per-change approval in the same session — the generic
+  "approved to commit" alone is insufficient.
+- Commit messages MUST follow **Conventional Commits**
+  (`type(scope): subject`).
+- The step-by-step commit procedure is in
+  `.claude/skills/safe-local-commit.md`. Agents MUST follow it every
+  time.
+
+A violation of this section is a governance incident.
+
+## Required cross-cuts in every module
+
+Every module MUST provide:
+
+1. A contract in `packages/schemas/`.
+2. Tests covering success, authorization failure, and audit emission.
+3. A short `README.md` in the module root describing purpose and boundaries.
+4. An owner line in `docs/runbooks/ownership.md` (when the file exists).
+
+Assistants MUST refuse to generate a module that skips any of the above.

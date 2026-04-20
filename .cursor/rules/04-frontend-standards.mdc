@@ -1,0 +1,89 @@
+---
+description: Frontend standards for Medcore — accessibility, PHI handling, state, and UX.
+globs:
+  - "apps/web/**"
+  - "packages/ui/**"
+alwaysApply: false
+---
+
+# Rule 04 — Frontend Standards
+
+The frontend is a trust boundary and the surface where PHI is rendered to
+humans. These rules apply to every UI component, page, and hook.
+
+## Accessibility
+
+- All components MUST meet **WCAG 2.1 AA**.
+- Every interactive element MUST have a stable, meaningful name exposed to
+  assistive technology.
+- Color alone MUST NOT convey meaning; pair with text or iconography.
+- Keyboard navigation MUST reach every interactive element in a logical
+  order, with visible focus.
+- Forms MUST expose errors programmatically, not only visually.
+- Motion MUST respect `prefers-reduced-motion`.
+
+## PHI rendering
+
+- Components that render PHI MUST be explicitly tagged (e.g., a `data-phi`
+  attribute or equivalent). Tagged components MUST NOT:
+  - Be logged, screenshotted by analytics, or sent to session-replay tools.
+  - Be persisted to `localStorage`, `sessionStorage`, `IndexedDB`, or cookies.
+  - Be copied to the clipboard without an explicit user action.
+- Tooltips, toasts, and error banners MUST NOT include PHI from unexpected
+  contexts.
+
+## State management
+
+- Client-side state is **not** an authorization boundary. Privilege checks
+  MUST happen on the server for every sensitive action.
+- Forms MUST validate using schemas from `packages/schemas/`. Client-only
+  validation is permitted as UX sugar, never as the sole check.
+- Derived state MUST be memoized deterministically; hidden mutations via
+  refs on render paths are prohibited.
+
+## Data fetching
+
+- All server calls MUST go through `packages/api-client`. Inline `fetch`
+  against internal services is prohibited.
+- Loading, empty, error, and partial states MUST be explicit for every
+  data-bound component. `undefined` rendered as "—" without intent is not
+  acceptable.
+- Requests MUST include a correlation / request ID propagated to the server
+  for audit.
+
+## Components
+
+- Shared components live in `packages/ui/`. App-specific one-offs live
+  beside their feature.
+- Components MUST be typed, have a stable API surface, and have at least one
+  test covering default, error, and empty states.
+- `any` / `unknown` escape hatches REQUIRE a comment stating the constraint
+  that forces them and a follow-up issue.
+
+## Styling
+
+- Design tokens from `packages/ui/` are the source of truth for color,
+  spacing, and typography. Hard-coded values are prohibited in feature code.
+- Dark mode and high-contrast mode MUST be supported at the token layer.
+- No inline style strings containing PHI.
+
+## Internationalization & locale
+
+- All user-facing strings MUST be wired through the i18n layer.
+- Dates, numbers, and units MUST be formatted via locale-aware helpers, not
+  string concatenation. Clinical units (e.g., mmHg, kg, °C) are explicit.
+
+## Performance
+
+- Routes MUST be code-split. Bundle budgets are declared in
+  `packages/config/` and enforced in CI.
+- Images MUST be responsive and lazy-loaded unless above the fold.
+- Third-party scripts REQUIRE an ADR and MUST be loaded with integrity and
+  referrer controls.
+
+## Analytics
+
+- Only approved analytics events fire. Event names and payloads are declared
+  in `packages/schemas/analytics/`.
+- Analytics payloads MUST NOT contain PHI. A redaction audit is part of the
+  PR checklist when analytics are touched.

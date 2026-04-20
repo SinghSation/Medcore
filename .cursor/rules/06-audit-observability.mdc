@@ -1,0 +1,98 @@
+---
+description: Audit, logging, metrics, tracing, and alerting standards.
+globs:
+  - "apps/**"
+  - "packages/**"
+alwaysApply: false
+---
+
+# Rule 06 — Audit & Observability
+
+Medcore cannot be operated — or defended in a compliance review — without
+rigorous audit and observability. These rules are not optional.
+
+## Audit
+
+- **Every PHI read and write MUST emit an audit event** at the data-access
+  boundary. An operation without an audit event is a defect.
+- Audit events MUST include: `timestamp`, `actor_id`, `actor_role`,
+  `tenant_id`, `subject_id` (patient where applicable), `action`, `resource`,
+  `resource_id`, `outcome`, `request_id`, `reason` (where justification is
+  required), and `client_info` (sanitized).
+- Audit events MUST NOT include raw PHI values. They record that access
+  occurred and to what resource, not the payload.
+- The audit store MUST be append-only, tamper-evident, and retained per
+  the retention policy declared in `docs/compliance/`.
+- Audit writes MUST be synchronous with the action being audited, or part
+  of the same atomic boundary. Fire-and-forget audit is prohibited.
+
+## Structured logging
+
+- Logs MUST be structured (JSON) and emitted through the shared logging
+  library. Ad-hoc `console.log`, `println`, or `fmt.Println` in production
+  paths is prohibited.
+- Every log line MUST carry: `timestamp`, `level`, `service`, `module`,
+  `request_id`, `tenant_id` (when available), and a `message` that does not
+  contain PHI or secrets.
+- Fields containing PHI MUST be tagged at the schema layer and redacted by
+  the logger. Assistants MUST NOT manually "scrub" PHI with string
+  replacement — rely on tagged redaction.
+- Log levels:
+  - `DEBUG` — developer-only, off in production by default.
+  - `INFO` — ordinary operations, sampled.
+  - `WARN` — unusual but handled conditions.
+  - `ERROR` — actionable failures; MUST include enough context to diagnose
+    without leaking PHI.
+
+## Metrics
+
+- Metric names follow `medcore_<module>_<subject>_<unit>` and are declared
+  in a metrics registry per module.
+- Every service MUST expose: request rate, error rate, latency (p50/p95/p99),
+  saturation, and dependency health.
+- Cardinality MUST be bounded. Never use user, patient, or free-form IDs
+  as metric labels.
+
+## Tracing
+
+- Every inbound request MUST establish a trace. Every outbound call and
+  database query MUST be a span on that trace.
+- Span attributes MUST NOT contain PHI or secrets.
+- Trace sampling is configured centrally; per-service overrides REQUIRE a
+  documented reason.
+
+## Correlation
+
+- A single `request_id` (and parent `trace_id` / `span_id`) MUST flow from
+  the edge through every downstream service and appear on every log, audit,
+  and error response.
+
+## Alerts & SLOs
+
+- Every user-facing workflow declares an SLO (availability and latency) in
+  `docs/runbooks/`. Alerts are derived from SLOs, not from raw thresholds.
+- Alerts MUST be actionable and MUST link to a runbook. Alerts without
+  runbooks are prohibited.
+- Noisy alerts are bugs; they MUST be tuned or removed within the SLA
+  declared in `docs/runbooks/alerting.md` (to be added).
+
+## Error handling
+
+- Errors MUST be logged at the boundary that can act on them, not at every
+  catch site.
+- Swallowing errors is prohibited. A `catch` that does not re-throw, log,
+  or transform MUST include a comment explaining why.
+- User-facing error messages MUST NOT contain stack traces, SQL, file paths,
+  or PHI.
+
+## Review checklist for observability changes
+
+A change that touches audit, logging, or metrics MUST answer:
+
+1. Which PHI field could reach this pipeline, and how is it redacted?
+2. What is the cardinality of any new label?
+3. What runbook covers the alert (if any)?
+4. How is this verified in a test?
+
+Assistants MUST attach these answers to the PR description whenever this
+rule is engaged.

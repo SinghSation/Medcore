@@ -1,38 +1,127 @@
-# macOS
-.DS_Store
+# -----------------------------------------------------------------------------
+# Medcore .gitignore
+#
+# This file is authoritative. Agents and contributors MUST NOT un-ignore any
+# of the PHI, secret, or credential patterns below without an ADR.
+# -----------------------------------------------------------------------------
 
-# Node
+# --- OS ----------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+Desktop.ini
+
+# --- IDE / editors -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.history/
+
+# --- Node / JS / TS ----------------------------------------------------------
 node_modules/
 dist/
 build/
+.next/
+.turbo/
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
 
-# Java
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Java / JVM --------------------------------------------------------------
 *.class
 *.jar
 *.war
-*.log
+*.ear
 target/
 .gradle/
 
-# Environment
-.env
-.env.local
-.env.*.local
+# --- Go ----------------------------------------------------------------------
+bin/
+*.test
+*.out
 
-# Logs
-logs/
-*.log
-
-# Terraform
+# --- Terraform / IaC ---------------------------------------------------------
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
+*.tfplan
 crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
-# IDE
-.vscode/
-.idea/
+# --- Secrets & environment (NEVER COMMIT) ------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+.aws/
+.gcp/
+.azure/
+service-account*.json
+credentials.json
+secrets.yaml
+secrets.yml
 
-# Misc
+# --- PHI / clinical data (NEVER COMMIT) --------------------------------------
+# Developers MUST NOT place real or realistic patient data in the repo.
+# Synthetic fixtures belong in a dedicated, reviewed location.
+*.phi
+*.phi.*
+patients/
+phi-fixtures/
+*.hl7
+*.ccda
+*.ccd
+*.ccr
+
+# --- Logs --------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Test / coverage ---------------------------------------------------------
 coverage/
+.nyc_output/
+test-results/
+playwright-report/
+*.lcov
+
+# --- Misc --------------------------------------------------------------------
 tmp/
+temp/
+*.tmp
+.cache
+.local/

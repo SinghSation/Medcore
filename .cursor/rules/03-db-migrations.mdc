@@ -1,0 +1,98 @@
+---
+description: Database schema, migration, and data-access rules.
+globs:
+  - "apps/api/**"
+  - "packages/schemas/**"
+  - "infra/terraform/**"
+  - "**/migrations/**"
+alwaysApply: false
+---
+
+# Rule 03 — Database & Migrations
+
+Schema changes are the single most dangerous class of change in a clinical
+system. These rules are strict by design.
+
+## General principles
+
+- All schema changes ship as **forward-only, reversible migrations** under
+  the owning module's `migrations/` directory.
+- Ad-hoc SQL against any non-local environment is prohibited. Every schema
+  mutation MUST be a committed migration.
+- Each migration MUST include an explicit **up** and **down** path, OR — if
+  a down is infeasible — a documented manual rollback plan attached to an
+  ADR.
+
+## Safety gates
+
+A migration is **dangerous** and REQUIRES an ADR plus a staged rollout plan
+when it does any of the following:
+
+- Drops a table, column, or index.
+- Renames a table or column in place.
+- Adds a `NOT NULL` constraint to a populated column without a default.
+- Changes a column type in a non-widening way.
+- Adds a unique constraint to a populated column.
+- Backfills more than a trivial volume of rows.
+- Locks a table longer than the approved online-migration budget.
+
+For dangerous migrations, assistants MUST:
+
+1. Pause and reference `.claude/skills/safe-db-migration.md`.
+2. Propose an expand / backfill / contract sequence across multiple releases.
+3. Document concurrency and locking behavior for the target database.
+
+## Required columns
+
+Every table that stores PHI or PII MUST include:
+
+- `id` — stable primary key.
+- `tenant_id` — non-null, indexed, enforced by row-level security where
+  available.
+- `created_at`, `updated_at` — timestamptz, non-null.
+- `created_by`, `updated_by` — references the acting principal.
+- `deleted_at` — nullable timestamp for soft-delete where applicable.
+- A versioning column (e.g., `row_version`) for optimistic concurrency when
+  the resource supports concurrent edits.
+
+## Indexing
+
+- Every foreign key MUST have an index.
+- Every high-cardinality filter column on a hot path MUST have an index.
+- Composite indexes MUST be ordered by selectivity, most selective first.
+- Index additions on large tables MUST use the online / `CONCURRENTLY`
+  mechanism provided by the engine.
+
+## Constraints & integrity
+
+- Foreign keys MUST be declared at the database layer, not only in code.
+- `CHECK` constraints MUST enforce enumerations and bounded ranges.
+- Cascading deletes are prohibited on PHI-bearing tables; use soft-delete or
+  explicit cleanup jobs.
+
+## Row-level tenancy
+
+- PHI tables MUST be scoped by `tenant_id`. Row-level security (RLS) MUST be
+  enabled where the database supports it.
+- Query builders MUST inject `tenant_id` automatically. Bypassing the tenancy
+  layer REQUIRES an ADR and a code review by the owner.
+
+## Access patterns
+
+- Application code accesses data only through the module's repository layer.
+- Cross-module table access is prohibited. A module reads another module's
+  data exclusively through the other module's API.
+- Long-running transactions are prohibited on PHI tables without an ADR.
+
+## Seeds and fixtures
+
+- Seed data is synthetic. Real patient data is prohibited in any seed file.
+- Fixtures for tests live in the test tree, not in production code paths.
+
+## Retention
+
+- Every PHI table MUST declare a retention policy in `docs/compliance/`.
+- Retention jobs MUST be idempotent, audited, and rehearsed in staging.
+
+Assistants MUST refuse to author a migration that violates any rule above
+and MUST name the specific rule violated.

@@ -1,0 +1,94 @@
+---
+description: Contract-first API rules. Applies to schemas, API code, and clients.
+globs:
+  - "packages/schemas/**"
+  - "packages/api-client/**"
+  - "apps/api/**"
+  - "apps/web/**"
+alwaysApply: false
+---
+
+# Rule 02 — API Contracts
+
+Medcore is **contract-first**. The contract is authoritative; code follows.
+Assistants MUST NOT implement an endpoint or client before the contract
+exists.
+
+## Source of truth
+
+- Internal HTTP APIs MUST be specified in **OpenAPI 3.1** under
+  `packages/schemas/openapi/`.
+- Clinical resources MUST use **HL7 FHIR R4** profiles under
+  `packages/schemas/fhir/`. Custom extensions MUST be namespaced and
+  documented.
+- Event payloads MUST be specified as JSON Schema (or Protobuf, when
+  binary/streaming is justified by an ADR).
+- Runtime validation MUST use a typed validator generated from or aligned
+  with the same schema (for example, Zod derived from OpenAPI).
+
+## Workflow (REQUIRED order)
+
+1. **Amend the contract** in `packages/schemas/`.
+2. **Generate** types and the client into `packages/api-client/`.
+3. **Implement the server** against the generated types.
+4. **Implement the client** against the generated client.
+5. **Tests** at every layer: schema conformance, server behavior, client
+   behavior, end-to-end contract test.
+
+Reversing this order is prohibited. If the assistant cannot find the
+relevant schema, it MUST stop and ask before writing the endpoint.
+
+## Versioning
+
+- External APIs MUST version via URL path (`/v1/…`) or a stable, documented
+  header.
+- Backward-incompatible changes REQUIRE a new version and a deprecation ADR
+  that includes: sunset date, client migration path, and telemetry to track
+  old-version usage.
+- Additive, backward-compatible changes MAY ship in the current version if
+  they pass contract tests.
+
+## Error model
+
+- Every endpoint MUST use the shared error envelope defined in
+  `packages/schemas/errors/`.
+- Errors MUST NOT leak stack traces, SQL, file paths, or PHI.
+- Error codes MUST be stable strings, not prose.
+
+## Pagination, filtering, sorting
+
+- List endpoints MUST be paginated. Unbounded list responses are prohibited.
+- Default page size and maximum page size MUST be declared in the schema.
+- Filters MUST be typed in the schema. Free-form query strings passed to the
+  database are prohibited.
+
+## Idempotency & concurrency
+
+- Mutating endpoints MUST accept an idempotency key when the operation can
+  be retried safely.
+- Resources with concurrent edit paths MUST use ETags or an equivalent
+  optimistic concurrency mechanism.
+
+## Hand-written HTTP
+
+- Direct `fetch`, `axios`, `http.Client`, or equivalent calls to internal
+  services are prohibited. Consumers MUST use `packages/api-client`.
+- Calls to **external** services MUST be wrapped in a typed client inside
+  `packages/api-client/external/` or an equivalent location, never inlined
+  in feature code.
+
+## FHIR specifics
+
+- Resource representations MUST validate against the published FHIR R4
+  structure definitions.
+- Search parameters MUST be declared and tested.
+- `Bundle` responses MUST declare `type` and include `total` where feasible.
+- Terminology bindings MUST use authoritative code systems (SNOMED CT,
+  LOINC, RxNorm, ICD-10-CM/PCS) as required by the resource.
+
+## Tests
+
+- Every contract change REQUIRES a contract test run that validates both
+  provider and consumer sides.
+- Schema drift between `packages/schemas/` and generated code is a CI
+  failure.

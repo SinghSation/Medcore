@@ -1,0 +1,93 @@
+---
+description: Testing policy — layers, coverage, fixtures, and required test classes.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Rule 05 — Testing Policy (alwaysApply)
+
+Tests are product. Untested changes to PHI paths, auth, audit, or billing
+logic are prohibited. Assistants MUST NOT merge, mark complete, or declare
+victory on a change without the tests required below.
+
+## Test pyramid
+
+1. **Unit** — pure, isolated, deterministic. Fast. No network, no disk,
+   no real database.
+2. **Integration** — real database (ephemeral), real HTTP layer, real
+   authz engine. Mocks only at the outer-most external boundary.
+3. **Contract** — provider/consumer validation against schemas in
+   `packages/schemas/`.
+4. **End-to-end** — a small, curated set covering critical clinical flows.
+
+Skewing tests toward end-to-end to "cover everything" is prohibited. Tests
+are intentional, with each layer doing the work only that layer can do.
+
+## Required test classes
+
+For every change, the assistant MUST provide the applicable tests below:
+
+- **Happy path** — the expected success.
+- **Authorization failure** — unauthenticated and authenticated-but-
+  unauthorized scenarios.
+- **Tenant isolation** — cross-tenant reads and writes are denied.
+- **Input validation** — malformed, oversized, and boundary inputs.
+- **Audit emission** — every PHI access writes the expected audit event.
+- **Idempotency** — retried mutations do not duplicate effects.
+- **Failure modes** — downstream failures produce the documented error
+  envelope, not a stack trace.
+
+## Database tests
+
+- Integration tests MUST hit a **real** database instance (e.g., Postgres
+  via ephemeral container). Mocking the database layer is prohibited.
+- Migrations MUST be tested forwards and backwards on a seeded snapshot.
+
+## Fixtures & data
+
+- All fixtures are **synthetic**. Real PHI, even with redactions, is
+  prohibited.
+- Fixture factories live in the test tree, not in production code.
+- Randomized tests MUST use a seeded RNG so failures are reproducible.
+
+## Determinism
+
+- Tests MUST NOT depend on wall-clock time except through an injected clock.
+- Tests MUST NOT depend on external network endpoints. Outbound calls are
+  stubbed at the HTTP boundary.
+- Flaky tests are bugs. Quarantine is a temporary measure, not a solution —
+  a quarantined test MUST have a tracked remediation issue.
+
+## Skips & waivers
+
+- `test.skip`, `xit`, `@Disabled`, `t.Skip`, etc. REQUIRE a code comment
+  linking the tracking issue and the date the skip may be revisited.
+- Disabling a CI job REQUIRES an ADR.
+- `--no-verify` on commit is prohibited.
+
+## Coverage
+
+- Coverage thresholds are defined per-package in `packages/config/`.
+- Coverage is a **floor**, not a ceiling, and MUST NOT substitute for the
+  required test classes above.
+
+## Security tests
+
+- Every authz change REQUIRES adversarial tests that attempt bypass.
+- Every parser or deserializer change REQUIRES tests with malformed,
+  hostile, and oversized inputs.
+
+## Performance tests
+
+- Hot paths declare performance budgets in `packages/config/`. A regression
+  beyond the declared budget is a test failure.
+
+## Reviewer responsibility
+
+Reviewers MUST reject a PR that:
+
+- Adds production code without tests.
+- Weakens a test ("assert true") to make CI pass.
+- Introduces snapshot tests as a substitute for behavioral assertions.
+- Quarantines a failing test without a tracked remediation issue.
