@@ -94,6 +94,78 @@ make api-dev
 - `/api/v1/me` returns `401` without a bearer token. Mint a dev token by
   POSTing to `http://localhost:8888/default/token` (see
   mock-oauth2-server docs) and pass it as `Authorization: Bearer <token>`.
+- `/api/v1/tenants` and `/api/v1/tenants/{slug}/me` are also `/api/**`
+  protected. At Phase 3B.1 no route *requires* the `X-Medcore-Tenant`
+  header, but when it is supplied the tenancy filter validates membership
+  and returns `403 tenancy.forbidden` on unknown slug / not-a-member /
+  suspended.
+
+#### Seed a tenant and explore the read surface
+
+No admin UI exists yet (Phase 3B.1 is read-only). To exercise the
+endpoints locally, seed rows with `psql` and call the API with a token
+from the mock OIDC server.
+
+1. Sign in once so identity JIT-provisions your user row. Mint a token
+   from the mock IdP and call `/me`:
+
+   ```bash
+   TOKEN="$(curl -fsS -X POST \
+     -d 'grant_type=client_credentials&client_id=medcore-dev&scope=openid' \
+     http://localhost:8888/default/token | jq -r .access_token)"
+
+   curl -fsS http://localhost:8080/api/v1/me \
+     -H "Authorization: Bearer $TOKEN" | jq .
+   ```
+
+   The response contains your `userId`. Save it:
+
+   ```bash
+   USER_ID="$(curl -fsS http://localhost:8080/api/v1/me \
+     -H "Authorization: Bearer $TOKEN" | jq -r .userId)"
+   ```
+
+2. Seed a tenant and an ACTIVE membership for that user:
+
+   ```bash
+   docker compose exec postgres \
+     psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+     -v user_id="'$USER_ID'" -c "
+       INSERT INTO tenancy.tenant
+         (id, slug, display_name, status, created_at, updated_at)
+       VALUES
+         (gen_random_uuid(), 'acme-health', 'Acme Health', 'ACTIVE', now(), now());
+
+       INSERT INTO tenancy.tenant_membership
+         (id, tenant_id, user_id, role, status, created_at, updated_at)
+       SELECT gen_random_uuid(), t.id, :user_id::uuid,
+              'OWNER', 'ACTIVE', now(), now()
+         FROM tenancy.tenant t
+        WHERE t.slug = 'acme-health';
+     "
+   ```
+
+3. Query the tenancy endpoints:
+
+   ```bash
+   # List your memberships
+   curl -fsS http://localhost:8080/api/v1/tenants \
+     -H "Authorization: Bearer $TOKEN" | jq .
+
+   # Fetch your membership for a specific slug
+   curl -fsS http://localhost:8080/api/v1/tenants/acme-health/me \
+     -H "Authorization: Bearer $TOKEN" | jq .
+
+   # Unknown slug / not-a-member / suspended membership → 403 tenancy.forbidden
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     http://localhost:8080/api/v1/tenants/does-not-exist/me \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+The slug format is enforced at the DB layer
+(`^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$`). Mock-OAuth2 client/scope values
+above are example defaults — adjust if you have customised the local
+mock configuration.
 
 ### Frontend
 

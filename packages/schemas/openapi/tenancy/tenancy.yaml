@@ -1,0 +1,191 @@
+openapi: 3.1.0
+info:
+  title: Medcore Tenancy API
+  version: 1.0.0
+  description: |
+    Tenancy read surface for Medcore (Phase 3B.1, ADR-001).
+
+    Authentication: OIDC bearer JWT (see the identity contract). On top of
+    authentication, every route validates that the caller has the
+    access required to see the requested data.
+
+    Header `X-Medcore-Tenant`:
+      - OPTIONAL on every route in this contract at Phase 3B.1.
+      - When present on ANY `/api/**` route, the server resolves the
+        caller's membership for that slug; if the slug is unknown, or the
+        caller is not a member, or the membership is not ACTIVE on an
+        ACTIVE tenant, the request is rejected 403 regardless of path.
+      - Future PHI-bearing routes (not in this contract) will REQUIRE the
+        header; the 403 discipline above already covers those failure
+        modes uniformly.
+
+    Audit surface: `tenancy.membership.list`, `tenancy.membership.denied`,
+    `tenancy.context.set` are declared in ADR-003 and land with Phase 3C;
+    this slice does NOT yet emit them (intentional, scoped deferral
+    tracked by in-code TODOs).
+
+servers:
+  - url: /api/v1
+    description: Medcore API v1
+
+security:
+  - bearerAuth: []
+
+paths:
+  /tenants:
+    get:
+      operationId: listMyTenantMemberships
+      summary: List the authenticated caller's active memberships
+      description: |
+        Returns one entry per tenant the caller is an ACTIVE member of,
+        where the tenant itself is ACTIVE. SUSPENDED / REVOKED memberships
+        and SUSPENDED / ARCHIVED tenants are filtered out. Order is by
+        `tenant.slug` ascending for determinism.
+
+        No tenant header is required — the result is scoped by the
+        authenticated principal.
+      tags: [tenancy]
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The caller's accessible memberships.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipList"
+        "401":
+          description: No valid bearer token was presented.
+          content:
+            application/json:
+              schema:
+                $ref: "../../errors/error-envelope.yaml#/components/schemas/ErrorEnvelope"
+
+  /tenants/{slug}/me:
+    get:
+      operationId: getMyMembershipForTenant
+      summary: Return the caller's membership details for a specific tenant
+      description: |
+        Returns the caller's membership in the tenant identified by
+        `slug`. Access is granted only when BOTH the membership and the
+        tenant are ACTIVE. Every other case — unknown slug, not a member,
+        suspended membership, archived tenant — returns the same 403
+        response to avoid enumeration side channels (Rule 01).
+      tags: [tenancy]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          description: URL-safe tenant slug.
+          schema:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$"
+          x-medcore-classification: Internal
+      responses:
+        "200":
+          description: The caller's membership in the tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "401":
+          description: No valid bearer token was presented.
+          content:
+            application/json:
+              schema:
+                $ref: "../../errors/error-envelope.yaml#/components/schemas/ErrorEnvelope"
+        "403":
+          description: |
+            Access denied. Returned for unknown slug, not-a-member,
+            suspended membership, and non-ACTIVE tenant. The body uses
+            the shared error envelope with `code = tenancy.forbidden`.
+          content:
+            application/json:
+              schema:
+                $ref: "../../errors/error-envelope.yaml#/components/schemas/ErrorEnvelope"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC JWT access token (ADR-002).
+  schemas:
+    TenantStatus:
+      type: string
+      description: Tenant lifecycle status.
+      enum: [ACTIVE, SUSPENDED, ARCHIVED]
+      x-medcore-classification: Internal
+
+    MembershipStatus:
+      type: string
+      description: Membership lifecycle status.
+      enum: [ACTIVE, SUSPENDED, REVOKED]
+      x-medcore-classification: Internal
+
+    MembershipRole:
+      type: string
+      description: |
+        Role within the tenant. Does NOT yet confer authorities at the
+        policy layer — role-to-authority mapping is a later slice.
+      enum: [OWNER, ADMIN, MEMBER]
+      x-medcore-classification: Internal
+
+    TenantSummary:
+      type: object
+      description: Projection of a tenant row.
+      required: [id, slug, displayName, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Opaque Medcore-internal tenant identifier.
+          x-medcore-classification: Internal
+        slug:
+          type: string
+          description: URL-safe tenant identifier; stable across renames.
+          x-medcore-classification: Internal
+        displayName:
+          type: string
+          description: Human-readable tenant name.
+          x-medcore-classification: Internal
+        status:
+          $ref: "#/components/schemas/TenantStatus"
+
+    Membership:
+      type: object
+      description: Caller's membership in a specific tenant.
+      required: [membershipId, userId, role, status, tenant]
+      properties:
+        membershipId:
+          type: string
+          format: uuid
+          description: Opaque Medcore-internal membership identifier.
+          x-medcore-classification: Internal
+        userId:
+          type: string
+          format: uuid
+          description: Caller's internal user identifier (identity.user.id).
+          x-medcore-classification: Internal
+        role:
+          $ref: "#/components/schemas/MembershipRole"
+        status:
+          $ref: "#/components/schemas/MembershipStatus"
+        tenant:
+          $ref: "#/components/schemas/TenantSummary"
+
+    MembershipList:
+      type: object
+      description: |
+        List envelope for memberships. `items` is sorted by `tenant.slug`
+        ascending and contains only ACTIVE memberships on ACTIVE tenants.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+          x-medcore-classification: Internal
