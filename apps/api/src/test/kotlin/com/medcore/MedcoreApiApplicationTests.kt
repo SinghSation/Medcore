@@ -39,7 +39,7 @@ class MedcoreApiApplicationTests {
     }
 
     @Test
-    fun `flyway history records three successful baselines`() {
+    fun `flyway history records expected migrations in order`() {
         data class Row(val version: String, val script: String, val success: Boolean)
 
         val rows = mutableListOf<Row>()
@@ -67,9 +67,10 @@ class MedcoreApiApplicationTests {
                 Row("1", "V1__identity_baseline.sql", true),
                 Row("2", "V2__tenancy_baseline.sql", true),
                 Row("3", "V3__audit_baseline.sql", true),
+                Row("4", "V4__identity_user.sql", true),
             ),
             rows,
-            "Flyway history MUST contain the three baseline migrations in order, all successful",
+            "Flyway history MUST contain every shipped migration in order, all successful",
         )
     }
 }

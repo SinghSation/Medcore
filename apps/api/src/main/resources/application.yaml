@@ -35,6 +35,15 @@ spring:
     baseline-on-migrate: false
     validate-on-migrate: true
 
+medcore:
+  oidc:
+    # Dev default points at the local mock-oauth2-server (ADR-002). Override
+    # at deploy time via environment variables. Production startup rejects
+    # any issuer containing `localhost` or `mock-oauth2-server` (ADR-002 §2).
+    issuer-uri: ${MEDCORE_OIDC_ISSUER_URI:http://localhost:8888/default}
+    audience: ${MEDCORE_OIDC_AUDIENCE:}
+    clock-skew: ${MEDCORE_OIDC_CLOCK_SKEW:30s}
+
 server:
   port: 8080
   shutdown: graceful

@@ -1,0 +1,43 @@
+openapi: 3.1.0
+info:
+  title: Medcore error envelope
+  version: 1.0.0
+  description: |
+    Shared error envelope for Medcore HTTP APIs (Rule 02 §Error model).
+    Every endpoint's `4xx` / `5xx` responses MUST reference this shape so
+    that errors are stable, typed, and PHI-free.
+paths: {}
+components:
+  schemas:
+    ErrorEnvelope:
+      type: object
+      description: |
+        Stable, machine-readable error shape. Never includes stack traces,
+        SQL, file paths, or PHI (Rule 01, Rule 02).
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: |
+            Stable error code slug. Opaque to clients; stable across releases.
+            Example: `auth.unauthenticated`.
+          x-medcore-classification: Internal
+        message:
+          type: string
+          description: |
+            Human-readable summary safe for operator logs and support
+            channels. MUST NOT contain PHI or secrets.
+          x-medcore-classification: Internal
+        requestId:
+          type: string
+          description: Correlation ID for this request.
+          x-medcore-classification: Internal
+        details:
+          type: object
+          description: |
+            Optional, additive, typed detail payload declared per error code.
+            MUST NOT carry PHI.
+          additionalProperties: true
+          x-medcore-classification: Internal

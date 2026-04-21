@@ -74,15 +74,26 @@ Two terminals.
 
 ### Backend
 
+Start the backing services first (`docs/runbooks/local-services.md`):
+
+```bash
+docker compose up -d postgres mock-oauth2-server
+```
+
+Then:
+
 ```bash
 make api-dev
 ```
 
 - Starts Spring Boot on `http://localhost:8080`.
-- Verify by watching for the log line
-  `Started MedcoreApiApplication in <n>s`. No HTTP endpoints are
-  exposed at bootstrap, so `curl http://localhost:8080/` will return
-  404 — that is expected.
+- Requires the mock OIDC server to be reachable at
+  `http://localhost:8888/default` (ADR-002). Without it, startup fails at
+  JWT decoder discovery — that is the intended behavior; authentication is
+  never silently disabled.
+- `/api/v1/me` returns `401` without a bearer token. Mint a dev token by
+  POSTing to `http://localhost:8888/default/token` (see
+  mock-oauth2-server docs) and pass it as `Authorization: Bearer <token>`.
 
 ### Frontend
 
@@ -105,6 +116,11 @@ make api-test        # Kotlin + JUnit 5, boots Spring context
 make web-test        # Vitest + happy-dom
 make test            # both
 ```
+
+Backend tests are fully self-contained: Testcontainers spins an ephemeral
+Postgres per run, and `no.nav.security:mock-oauth2-server` starts an
+in-process OIDC provider. No external services (including the compose
+`postgres`/`mock-oauth2-server` containers) are required for `make api-test`.
 
 ## 6. Type checking and build
 

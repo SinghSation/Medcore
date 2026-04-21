@@ -50,6 +50,8 @@ venv/
 *.ear
 target/
 .gradle/
+# Kotlin incremental / daemon caches (written under module roots on build)
+.kotlin/
 
 # Gradle wrapper jars are explicitly tracked — they are part of the wrapper
 # contract that makes ./gradlew self-bootstrap on a fresh clone.

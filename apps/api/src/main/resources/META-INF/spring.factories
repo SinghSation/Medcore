@@ -1,0 +1,6 @@
+# Registers the ADR-002 §2 production-profile guardrail as a SpringApplication
+# listener so it fires BEFORE context/bean binding. If the prod profile is
+# active and the configured OIDC issuer is a dev IdP (localhost,
+# mock-oauth2-server, loopback), startup aborts.
+org.springframework.context.ApplicationListener=\
+com.medcore.platform.config.ProdProfileOidcGuard

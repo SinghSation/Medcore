@@ -10,9 +10,11 @@ Medcore's `docker-compose.yml` is for developer workstations only. It is
 not production configuration — production infrastructure lives in
 `infra/terraform/` (ADR-001 §6).
 
-At Phase 3A Step 1 the only service defined is PostgreSQL. Additional
-services (mock OIDC, etc.) are added in later steps under their own
-ADRs.
+Services defined as of Phase 3A.3:
+
+- `postgres` — primary relational store (ADR-001).
+- `mock-oauth2-server` — local OIDC IdP (ADR-002). Dev-only; the backend
+  refuses to use it under the `prod` profile (ADR-002 §2).
 
 ---
 
@@ -41,6 +43,7 @@ POSTGRES_PASSWORD=<choose-a-local-password>
 # POSTGRES_USER=medcore
 # POSTGRES_DB=medcore_dev
 # POSTGRES_PORT=5432
+# MOCK_OAUTH2_PORT=8888
 ```
 
 `POSTGRES_PASSWORD` is required. If it is unset, `docker compose up`
@@ -59,11 +62,12 @@ be removed from the index before you write a real password into it.
 ## 3. Start
 
 ```bash
-docker compose up -d postgres
+docker compose up -d postgres mock-oauth2-server
 ```
 
-- Pulls `postgres:16.4` on first run.
-- Starts the container detached.
+- Pulls `postgres:16.4` and `ghcr.io/navikt/mock-oauth2-server:2.1.10` on
+  first run.
+- Starts both containers detached.
 - Creates the `medcore_postgres_data` volume if it doesn't exist.
 
 Verify:
@@ -73,7 +77,20 @@ docker compose ps
 ```
 
 The `postgres` service MUST report `running` with `Health: healthy`.
-If it stays `starting` past ~60s, see §9.
+The `mock-oauth2-server` service MUST report `running`.
+If postgres stays `starting` past ~60s, see §9.
+
+Verify the mock OIDC discovery document is reachable:
+
+```bash
+curl -fsS http://localhost:${MOCK_OAUTH2_PORT:-8888}/default/.well-known/openid-configuration \
+  | head -c 80
+# expected: JSON starting with `{"issuer":"http://localhost:8888/default"...`
+```
+
+The backend's default `MEDCORE_OIDC_ISSUER_URI` points at
+`http://localhost:8888/default`. Override via environment variable when
+running against a different IdP.
 
 ## 4. Stop
 

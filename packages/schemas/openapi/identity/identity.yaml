@@ -1,0 +1,128 @@
+openapi: 3.1.0
+info:
+  title: Medcore Identity API
+  version: 1.0.0
+  description: |
+    Identity endpoints for Medcore (Phase 3A.3, ADR-002).
+
+    Contract-first per Rule 02 — the server implementation in `apps/api`
+    and any future typed client in `packages/api-client` are derived from
+    this file.
+
+    Authentication: OIDC bearer JWT. The resource server validates the
+    token's signature, issuer, expiry, and (when configured) audience
+    before the handler runs. See ADR-002.
+
+    Audit surface: `/me` triggers just-in-time provisioning of
+    `identity.user` on first call. Audit events for
+    `identity.user.provisioned` / `identity.user.login.success` are
+    declared in ADR-003 and land with Phase 3C; this slice does NOT yet
+    emit them (intentional, scoped deferral).
+servers:
+  - url: /api/v1
+    description: Medcore API v1
+
+security:
+  - bearerAuth: []
+
+paths:
+  /me:
+    get:
+      operationId: getMe
+      summary: Return the authenticated caller's identity
+      description: |
+        Returns the Medcore-internal identity row for the caller derived
+        from the bearer JWT's `(iss, sub)` pair. If no row exists yet it
+        is provisioned atomically before the response is written.
+
+        The response carries the caller's PII projection (email, display
+        name, preferred username) and identity status. It does NOT carry
+        tenant membership, roles, or PHI — those are out of scope for this
+        slice and will arrive in later phases under their own ADRs.
+      tags:
+        - identity
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The authenticated caller's identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: No valid bearer token was presented.
+          content:
+            application/json:
+              schema:
+                $ref: "../../errors/error-envelope.yaml#/components/schemas/ErrorEnvelope"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OIDC JWT access token. Issuer, audience, and claim expectations are
+        driven by `MedcoreOidcProperties` (Rule 01, ADR-002).
+  schemas:
+    Me:
+      type: object
+      description: |
+        The Medcore-internal identity projection for the authenticated caller.
+      required:
+        - userId
+        - issuer
+        - subject
+        - emailVerified
+        - status
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: |
+            Stable, opaque Medcore-internal user identifier (`identity.user.id`).
+            This is the value downstream modules MUST use to reference the
+            caller; cross-module references NEVER use the external
+            `(issuer, subject)` pair (ADR-001 §2).
+          x-medcore-classification: Internal
+        issuer:
+          type: string
+          description: |
+            OIDC issuer URI that vouched for the caller's token. Internal
+            diagnostic context; not a credential.
+          x-medcore-classification: Internal
+        subject:
+          type: string
+          description: |
+            OIDC `sub` claim — the external IdP's stable identifier for the
+            caller. Opaque and issuer-scoped.
+          x-medcore-classification: Internal
+        email:
+          type: string
+          nullable: true
+          description: Caller's email address, if the IdP supplied one.
+          x-medcore-classification: PII
+        emailVerified:
+          type: boolean
+          description: Whether the IdP marked the email as verified.
+          x-medcore-classification: Internal
+        displayName:
+          type: string
+          nullable: true
+          description: Human-readable display name, if the IdP supplied one.
+          x-medcore-classification: PII
+        preferredUsername:
+          type: string
+          nullable: true
+          description: OIDC `preferred_username`, if the IdP supplied one.
+          x-medcore-classification: PII
+        status:
+          type: string
+          description: Identity lifecycle status.
+          enum:
+            - ACTIVE
+            - DISABLED
+            - DELETED
+          x-medcore-classification: Internal
