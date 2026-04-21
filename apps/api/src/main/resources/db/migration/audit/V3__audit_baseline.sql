@@ -1,0 +1,5 @@
+-- Baseline for the audit module.
+-- The `audit` schema is provisioned by spring.flyway.schemas
+-- at application startup; this migration is intentionally empty
+-- except for this marker. Real DDL (audit.audit_event) lands in
+-- a later V__*.sql under this directory per ADR-003 / Phase 3C.

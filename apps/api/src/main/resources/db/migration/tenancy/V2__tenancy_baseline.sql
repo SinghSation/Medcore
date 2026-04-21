@@ -1,0 +1,6 @@
+-- Baseline for the tenancy module.
+-- The `tenancy` schema is provisioned by spring.flyway.schemas
+-- at application startup; this migration is intentionally empty
+-- except for this marker. Real DDL (tenancy.tenant,
+-- tenancy.tenant_membership) lands in later V__*.sql files under
+-- this directory per Phase 3B.

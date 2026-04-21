@@ -1,0 +1,5 @@
+-- Baseline for the identity module.
+-- The `identity` schema is provisioned by spring.flyway.schemas
+-- at application startup; this migration is intentionally empty
+-- except for this marker. Real DDL (identity.user, etc.) lands in
+-- a later V__*.sql under this directory per ADR-002.

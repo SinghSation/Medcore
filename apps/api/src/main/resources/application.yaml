@@ -2,6 +2,39 @@ spring:
   application:
     name: medcore-api
 
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:medcore_dev}
+    username: ${POSTGRES_USER:medcore}
+    password: ${POSTGRES_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      pool-name: medcore-hikari
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations:
+      - classpath:db/migration/identity
+      - classpath:db/migration/tenancy
+      - classpath:db/migration/audit
+    schemas:
+      - flyway
+      - identity
+      - tenancy
+      - audit
+    default-schema: flyway
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
 server:
   port: 8080
   shutdown: graceful
