@@ -1,5 +1,6 @@
 package com.medcore.platform.audit
 
+import java.sql.PreparedStatement
 import java.sql.Timestamp
 import java.sql.Types
 import java.time.Clock
@@ -11,42 +12,36 @@ import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.support.TransactionTemplate
 
 /**
- * JDBC-based append-only writer for `audit.audit_event` (Audit v1,
- * ADR-003 §2).
+ * JDBC-based append-only writer for `audit.audit_event` (Audit v2 per
+ * ADR-003 §2, Phase 3D).
  *
- * Why JDBC rather than JPA:
- *   - Audit rows are write-once, read-rarely, never updated. JPA's
- *     change-tracking and dirty-flush machinery is extra rope, not
- *     value, for that shape.
- *   - A single `INSERT` statement against typed positional parameters is
- *     the simplest and easiest-to-review mapping from
- *     [AuditEventCommand] to the V7 schema. The SQL is right here and a
- *     reviewer can verify column-by-column that no free-form content
- *     leaks.
+ * v2 changes vs v1:
+ *   - Writes now go through the DB function `audit.append_event(...)`,
+ *     which acquires `pg_advisory_xact_lock`, derives the next
+ *     `sequence_no` and `prev_hash` from the chain tip, computes the
+ *     row's `row_hash`, and INSERTs in one atomic step. The Kotlin
+ *     side no longer computes hashes — canonicalisation and hashing
+ *     live exclusively in Postgres so the writer, the migration
+ *     backfill, and `audit.verify_chain()` share a single byte-stable
+ *     source of truth.
+ *   - Everything in v1 that made the writer safe is preserved:
+ *       - `TransactionTemplate` with PROPAGATION_REQUIRED joins the
+ *         caller's transaction (identity / tenancy services) or
+ *         starts a fresh one (filter / entry point). The
+ *         `AuditTransactionAtomicityTest` continues to prove rollback
+ *         semantics end-to-end.
+ *       - Exceptions propagate (ADR-003 §2 — failure to write audit
+ *         fails the audited action).
+ *       - Request metadata is lifted by [RequestMetadataProvider]; no
+ *         caller touches HTTP internals.
+ *       - No free-form payload bag. [AuditEventCommand] stays flat
+ *         and typed.
  *
- * Transaction semantics (load-bearing — this is what ADR-003 §2 means
- * by "synchronous, inside the caller's @Transactional scope"):
- *
- *   - Uses a [TransactionTemplate] with `PROPAGATION_REQUIRED` (the
- *     default). When called from a service method that is already
- *     `@Transactional`, Spring's transaction manager has bound a
- *     connection to the current thread; both [JdbcTemplate] and
- *     `TransactionTemplate` go through the same shared
- *     `DataSourceTransactionManager`, so the INSERT joins that
- *     transaction and commits or rolls back atomically with the
- *     audited action.
- *   - When called from outside any transaction (servlet filter,
- *     authentication entry point), `PROPAGATION_REQUIRED` starts a
- *     fresh transaction for the INSERT alone. The audit row commits
- *     independently — there is no audited write to roll back into.
- *   - Exceptions propagate. ADR-003 §2: failure to write audit fails
- *     the audited action. `AuditTransactionAtomicityTest` proves this
- *     by injecting a failure into the writer and asserting the
- *     in-flight `identity.user` insert is rolled back.
- *
- * The writer accepts a typed [AuditEventCommand] and never serializes
- * arbitrary objects. PHI cannot enter through this path without
- * widening [AuditEventCommand] in a separately-reviewed change.
+ * Role / grants: the writer runs SQL as the application's runtime
+ * datasource role. V9 grants `EXECUTE ON audit.append_event(...)` to
+ * `medcore_app`; superusers (the current local-dev role) have the
+ * permission implicitly. When the runtime role switch lands (deferred
+ * ops slice), no writer change is required.
  */
 @Service
 class JdbcAuditWriter(
@@ -61,44 +56,53 @@ class JdbcAuditWriter(
     override fun write(command: AuditEventCommand) {
         val metadata = requestMetadataProvider.current()
         val recordedAt = Instant.now(clock)
+        val id = UUID.randomUUID()
+
         transactionTemplate.executeWithoutResult {
-            jdbcTemplate.update { connection ->
-                val sql = """
-                    INSERT INTO audit.audit_event (
-                        id, recorded_at, tenant_id, actor_type, actor_id, actor_display,
-                        action, resource_type, resource_id, outcome,
-                        request_id, client_ip, user_agent, reason
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::inet, ?, ?)
-                """.trimIndent()
-                val ps = connection.prepareStatement(sql)
-                ps.setObject(1, UUID.randomUUID())
-                ps.setTimestamp(2, Timestamp.from(recordedAt))
-                setNullableUuid(ps, 3, command.tenantId)
-                ps.setString(4, command.actorType.name)
-                setNullableUuid(ps, 5, command.actorId)
-                ps.setString(6, command.actorDisplay)
-                ps.setString(7, command.action.code)
-                ps.setString(8, command.resourceType)
-                ps.setString(9, command.resourceId)
-                ps.setString(10, command.outcome.name)
-                ps.setString(11, metadata.requestId)
-                ps.setString(12, metadata.clientIp)
-                ps.setString(13, metadata.userAgent)
-                ps.setString(14, command.reason)
-                ps
+            // PG JDBC's executeUpdate() rejects SELECT; the function
+            // call returns a BIGINT sequence_no we discard. Using
+            // execute() lets the driver handle the ResultSet path.
+            jdbcTemplate.execute(APPEND_EVENT_SQL) { ps: PreparedStatement ->
+                var i = 1
+                ps.setObject(i++, id)
+                ps.setTimestamp(i++, Timestamp.from(recordedAt))
+                setNullableUuid(ps, i++, command.tenantId)
+                ps.setString(i++, command.actorType.name)
+                setNullableUuid(ps, i++, command.actorId)
+                ps.setString(i++, command.actorDisplay)
+                ps.setString(i++, command.action.code)
+                ps.setString(i++, command.resourceType)
+                ps.setString(i++, command.resourceId)
+                ps.setString(i++, command.outcome.name)
+                ps.setString(i++, metadata.requestId)
+                ps.setString(i++, metadata.clientIp)
+                ps.setString(i++, metadata.userAgent)
+                ps.setString(i, command.reason)
+                ps.execute()
+                null
             }
         }
     }
 
-    private fun setNullableUuid(
-        ps: java.sql.PreparedStatement,
-        index: Int,
-        value: UUID?,
-    ) {
+    private fun setNullableUuid(ps: PreparedStatement, index: Int, value: UUID?) {
         if (value == null) {
             ps.setNull(index, Types.OTHER)
         } else {
             ps.setObject(index, value)
         }
+    }
+
+    private companion object {
+        // Positional parameters matching audit.append_event's signature
+        // in V9. `::inet` cast handles null strings cleanly
+        // (null-cast-to-inet = null INET).
+        const val APPEND_EVENT_SQL: String = """
+            SELECT audit.append_event(
+                ?::uuid, ?, ?::uuid,
+                ?, ?::uuid, ?,
+                ?, ?, ?, ?,
+                ?, ?::inet, ?, ?
+            )
+        """
     }
 }

@@ -269,7 +269,104 @@ Switching the running app to connect as `medcore_app` is an ops task
 tracked for a later slice (it requires datasource property plumbing and
 a secret-manager wiring that lives outside this phase).
 
-## 12. Related
+## 12. Row-level security (Phase 3D, V8)
+
+> **Scope note.** Phase 3D lands the RLS substrate (policies, GUC
+> contract, grants, tests). RLS correctness is proven against
+> `medcore_app`, but **runtime enforcement for the running
+> application remains dependent on the deferred datasource-role
+> switch.** Until that ops slice lands, the live app connects as
+> the container superuser and BYPASSES RLS by Postgres design. This
+> is intentional and explicit, not an oversight.
+
+V8 enables Postgres RLS on `tenancy.tenant` and
+`tenancy.tenant_membership`. Two policies apply to `medcore_app` (the
+non-superuser role V7 created):
+
+- `p_tenant_select_by_active_membership` on `tenancy.tenant` —
+  caller may see a tenant row only if they have an ACTIVE membership
+  for it.
+- `p_membership_select_own` on `tenancy.tenant_membership` — caller
+  may see only their own rows.
+
+Policies key on two session GUCs:
+
+- `app.current_user_id` — required for the policies above.
+- `app.current_tenant_id` — set by `TenancySessionContext` for
+  consistency with Phase 4 PHI policies; not read by any 3D policy.
+
+Both GUCs are set with `SELECT set_config(name, value, true)` (i.e.
+`SET LOCAL`), so Postgres auto-reverts them at transaction
+commit/rollback — no GUC leakage across pooled connections.
+
+Superusers (the container default `medcore` user, which the app
+currently connects as) BYPASS RLS. The policies activate in
+production when the runtime datasource switches to `medcore_app`
+(deferred ops slice — see §11 above). `TenancyRlsTest` connects
+directly as `medcore_app` with the test-only password and asserts
+RLS enforcement end-to-end.
+
+To explore locally:
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "ALTER ROLE medcore_app WITH PASSWORD 'local-only-do-not-reuse';"
+
+PGPASSWORD='local-only-do-not-reuse' psql \
+  -h localhost -p "${POSTGRES_PORT:-5432}" \
+  -U medcore_app -d "${POSTGRES_DB:-medcore_dev}" <<'SQL'
+BEGIN;
+-- Pretend to be some identity.user.id
+SELECT set_config('app.current_user_id', 'your-user-uuid', true);
+SELECT slug FROM tenancy.tenant;           -- RLS-filtered
+SELECT user_id FROM tenancy.tenant_membership;
+ROLLBACK;
+SQL
+```
+
+## 13. Audit v2 chain verification (Phase 3D, V9)
+
+V9 adds `sequence_no`, `prev_hash`, `row_hash` to
+`audit.audit_event` and four functions under the `audit` schema:
+
+- `audit.canonicalize_event(...)` — deterministic string form of a
+  row (pipe-delimited, UTC microsecond timestamps, hex-encoded
+  previous hash for byte stability).
+- `audit.compute_chain_hash(canonical, prev_hash)` —
+  `sha256(canonical || hex(prev_hash))`.
+- `audit.append_event(...)` — the new write path (replaces raw
+  INSERT). Acquires `pg_advisory_xact_lock`, derives the next
+  sequence number from the chain tip, computes the row hash, inserts.
+  `medcore_app` has `EXECUTE`; `JdbcAuditWriter` calls it.
+- `audit.verify_chain()` — returns one row per broken link with a
+  coded `reason` (`sequence_gap`, `row_hash_mismatch`,
+  `prev_hash_mismatch`, `first_row_has_prev_hash`, `sequence_no_null`).
+  Returns zero rows for a healthy chain.
+
+Verify a local chain:
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "SELECT * FROM audit.verify_chain();"
+# expected: 0 rows
+```
+
+Rebuild (ops-only, requires superuser UPDATE on audit.audit_event):
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "SELECT audit.rebuild_chain();"
+# returns the number of rows re-hashed
+```
+
+The `AuditV2ChainTest` integration test exercises the full loop:
+happy-path appends → `verify_chain()` clean → tamper via superuser
+→ `verify_chain()` reports the break with the correct reason code.
+
+## 14. Related
 
 - **ADR-001** — PostgreSQL + Flyway + row-level tenancy.
 - `.cursor/rules/03-db-migrations.mdc` — migration rules (applies

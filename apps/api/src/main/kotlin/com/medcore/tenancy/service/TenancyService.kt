@@ -5,6 +5,7 @@ import com.medcore.platform.audit.AuditAction
 import com.medcore.platform.audit.AuditEventCommand
 import com.medcore.platform.audit.AuditOutcome
 import com.medcore.platform.audit.AuditWriter
+import com.medcore.platform.persistence.TenancySessionContext
 import com.medcore.platform.tenancy.MembershipRole
 import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.ResolvedMembership
@@ -57,10 +58,15 @@ class TenancyService(
     private val tenantRepository: TenantRepository,
     private val membershipRepository: TenantMembershipRepository,
     private val auditWriter: AuditWriter,
+    private val sessionContext: TenancySessionContext,
 ) : TenantMembershipLookup {
 
     @Transactional(readOnly = true)  // pure read; filter writes audit OUTSIDE this tx
     override fun resolve(userId: UUID, slug: String): ResolvedMembership? {
+        // RLS backstop: tenant-scoped queries require app.current_user_id
+        // to match the caller. app.current_tenant_id is not used by 3D
+        // policies but is set for consistency with Phase 4 PHI routes.
+        sessionContext.apply(userId = userId, tenantId = null)
         val tenant = tenantRepository.findBySlug(slug) ?: return null
         val membership = membershipRepository.findByTenantIdAndUserId(tenant.id, userId)
             ?: return null
@@ -77,6 +83,7 @@ class TenancyService(
      * commit together (ADR-003 §2).
      */
     fun listMembershipsFor(userId: UUID): List<MembershipDetail> {
+        sessionContext.apply(userId = userId, tenantId = null)
         val memberships = membershipRepository.findAllByUserId(userId)
         val result: List<MembershipDetail>
         if (memberships.isEmpty()) {
@@ -117,6 +124,7 @@ class TenancyService(
      *     denial decision (ADR-003 §2). Therefore not `readOnly = true`.
      */
     fun findMembershipForCallerBySlug(userId: UUID, slug: String): TenantMembershipResult {
+        sessionContext.apply(userId = userId, tenantId = null)
         val tenant = tenantRepository.findBySlug(slug)
         if (tenant == null) {
             emitDenied(userId, tenantId = null, reason = DenialReason.SLUG_UNKNOWN)

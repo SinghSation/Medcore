@@ -51,12 +51,20 @@ class AuditImmutabilityTest {
     }
 
     @Test
-    fun `medcore_app can INSERT an audit row`() {
-        appRoleJdbc().update(
+    fun `medcore_app can INSERT an audit row via append_event`() {
+        // Post-V9, audit_event requires sequence_no + row_hash which are
+        // set by audit.append_event. medcore_app has EXECUTE on that
+        // function but not direct INSERT privileges outside the function's
+        // implementation path; the V7 table-level INSERT grant still
+        // applies because append_event uses SECURITY INVOKER.
+        appRoleJdbc().queryForList(
             """
-            INSERT INTO audit.audit_event
-                (id, recorded_at, actor_type, action, outcome)
-            VALUES (?, ?, 'SYSTEM', 'identity.user.provisioned', 'SUCCESS')
+            SELECT audit.append_event(
+                ?::uuid, ?, NULL::uuid,
+                'SYSTEM', NULL::uuid, NULL,
+                'identity.user.provisioned', NULL, NULL, 'SUCCESS',
+                NULL, NULL::inet, NULL, NULL
+            )
             """.trimIndent(),
             UUID.randomUUID(),
             java.sql.Timestamp.from(Instant.now()),
@@ -108,11 +116,18 @@ class AuditImmutabilityTest {
     // ---------------------------------------------------------------- helpers
 
     private fun seedAuditRow() {
-        jdbc.update(
+        // Use append_event so the v2 chain columns (sequence_no, row_hash)
+        // are populated correctly. Direct INSERT is rejected by the
+        // post-V9 NOT NULL constraints — which is part of the immutability
+        // story we are testing.
+        jdbc.queryForList(
             """
-            INSERT INTO audit.audit_event
-                (id, recorded_at, actor_type, action, outcome)
-            VALUES (?, ?, 'SYSTEM', 'identity.user.provisioned', 'SUCCESS')
+            SELECT audit.append_event(
+                ?::uuid, ?, NULL::uuid,
+                'SYSTEM', NULL::uuid, NULL,
+                'identity.user.provisioned', NULL, NULL, 'SUCCESS',
+                NULL, NULL::inet, NULL, NULL
+            )
             """.trimIndent(),
             UUID.randomUUID(),
             java.sql.Timestamp.from(Instant.now()),
