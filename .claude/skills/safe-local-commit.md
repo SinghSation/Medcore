@@ -1,39 +1,99 @@
 ---
 name: safe-local-commit
-description: Use whenever the human has said the exact phrase "approved to commit". Runs the mandatory pre-commit checklist, stages only intended files, produces a Conventional Commit, and reports the hash. Never pushes, amends, rebases, merges, tags, or deletes branches.
+description: Use before any local git commit. Classifies the slice into the tier model from ADR-004, runs the mandatory pre-commit checklist, stages only intended files, produces a Conventional Commit, reports the hash, and — for Tier 1 — continues into push. Never amends, rebases, merges, tags, force-pushes, or deletes branches.
 ---
 
 # Skill: safe-local-commit
 
-Medcore permits **local** git commits by the assistant only under the
-strict guardrails defined in `AGENTS.md` §4.7. This skill is the
-procedure. Follow it step-by-step. Do NOT improvise. Do NOT batch
-steps. If any step fails, STOP and report — do not proceed.
+Medcore permits local git commits (and, for Tier 1, autonomous pushes)
+by the assistant only under the tiered guardrails defined in
+`AGENTS.md` §§4.7–4.8 and ADR-004. This skill is the procedure. Follow
+it step-by-step. Do NOT improvise. Do NOT batch steps. If any step
+fails, STOP and report — do not proceed.
 
-## Preconditions (hard gate)
+## Step 0 — Classify the slice
 
-Before running any git command, verify ALL of the following:
+Determine the tier **before** doing anything else. Per ADR-004 §2.1:
 
-- [ ] The human has said the exact phrase **"approved to commit"** in
-      the current session. Paraphrases (e.g., "go ahead and commit",
-      "commit it", "yes commit", "lgtm") do NOT count. If the phrase is
-      absent, STOP and ask for it.
-- [ ] The approval covers the specific change about to be committed,
-      not a prior or unrelated change.
-- [ ] The task is complete within the agreed scope.
-- [ ] All required validations for the touched area have been run and
-      reported as passing **in the current session**. Stale results
-      from earlier turns do not count.
-- [ ] The request is a commit only. No `push`, `--amend`, `rebase`,
-      `merge`, `tag`, branch deletion, or history rewrite is being
-      attempted — those are governed by `AGENTS.md` §4.8 and REQUIRE
-      **"approved to push"**.
+**Tie-breaker first:** if the slice spans multiple tiers OR
+classification is ambiguous, the **highest tier touched applies to
+the entire slice**. Mixed-tier slices are never classified down.
+Walk each changed file through the tier tests below and take the
+max.
 
-If any precondition fails, STOP.
+- **Tier 3 (high-risk)** if the diff touches any of: authentication,
+  authorization, audit logging, non-additive migrations,
+  `infra/**`, dependency manifests / lockfiles, secrets, PHI paths,
+  `packages/schemas/fhir/**`, governance files (`AGENTS.md`,
+  `.cursor/rules/**`, `.claude/**`, `docs/adr/**`,
+  `docs/architecture/**`), or any area you cannot confidently
+  classify.
+- **Tier 2 (medium-risk)** if not Tier 3 and the diff touches:
+  purely additive migrations (new tables, nullable-no-default
+  ADD COLUMN, CREATE INDEX, grant/type expansions — see ADR-004
+  §2.1 for the full allow/deny list; anything outside it is Tier 3),
+  new non-FHIR OpenAPI contracts, new endpoints / controllers /
+  services outside Tier 3 areas, test infrastructure affecting
+  production-posture guarantees, or security-adjacent runbooks.
+- **Tier 1 (safe)** otherwise.
 
-## Step 1 — Inspect the working tree
+Record the tier choice AND the rationale. Both will appear in the
+commit body (`Tier: N`) and the final report.
 
-Run and show the human the output of:
+## Step 1 — Check overrides
+
+If the human has issued any of the following in the current session,
+obey before proceeding:
+
+- **"hold"** — stop immediately.
+- **"review only"** / **"draft only"** — produce the review pack;
+  skip commit.
+- **"do not commit"** — skip commit.
+- **"do not push"** — may commit if the tier permits; must not push.
+
+## Step 2 — Preconditions (hard gate, all tiers)
+
+Verify ALL of `AGENTS.md` §4.7.3 universal preconditions:
+
+- [ ] Task complete within the agreed scope.
+- [ ] Full list of changed files shown and summarized.
+- [ ] All required validations run in the current session and passing.
+- [ ] No forbidden content staged (secrets, `.env`, PHI, OS junk,
+      build artifacts, out-of-scope files).
+- [ ] Commit body will carry a **`Tier: N`** line and a
+      carry-forward list (§4.7.5).
+
+Also verify the universal guardrails (§4.7.4) — none must be
+triggered:
+
+- [ ] No failing tests.
+- [ ] No conflict with an accepted ADR.
+- [ ] No conflict with `AGENTS.md` or `.cursor/rules/**`.
+- [ ] No high-risk area touched that the review pack did not flag.
+- [ ] No unclear migration safety.
+- [ ] No ambiguity in tier classification.
+
+If any precondition fails or any guardrail trips, STOP.
+
+## Step 3 — Tier-specific authority check
+
+**Tier 3:** verify in the session log:
+
+- [ ] The exact phrase **"approved to commit"** (paraphrases do NOT
+      count).
+- [ ] An explicit per-change approval naming the high-risk area(s).
+- [ ] Scope of that approval matches what is about to be committed.
+
+If any is missing, STOP and request the missing phrase.
+
+**Tier 2:** no commit phrase required. Proceed to Step 4.
+(The `"approved to push"` phrase will be required at Step 9.)
+
+**Tier 1:** no commit phrase required. Proceed to Step 4.
+
+## Step 4 — Inspect the working tree
+
+Run and show the human:
 
 - `git status --short`
 - `git diff --stat`
@@ -42,58 +102,29 @@ Run and show the human the output of:
 
 Do NOT stage anything yet.
 
-## Step 2 — Classify the change
-
-Determine whether the change touches any **high-risk area** defined in
-`AGENTS.md` §4.7:
-
-- Authentication, authorization, audit logging.
-- Database migrations (`**/migrations/**`).
-- Infrastructure / Terraform (`infra/**`).
-- Dependency manifests or lockfiles.
-- Encryption, key management, secrets handling.
-- PHI-handling code paths.
-- Interoperability / FHIR contracts (`packages/schemas/fhir/**`).
-- Governance files (`AGENTS.md`, `.cursor/rules/**`, `.claude/**`,
-  `docs/adr/**`, `docs/architecture/**`).
-
-If the change touches ANY high-risk area and the human has not given a
-**specific per-change approval** in the current session (beyond the
-generic "approved to commit"), STOP, list the high-risk areas touched,
-and request the explicit per-change approval.
-
-## Step 3 — Forbidden-content scan
-
-Refuse to stage any file that is, or contains, any of the following:
-
-- A secret, API key, token, credential, private key, or certificate.
-- A `.env` file (anything starting with `.env` other than
-  `.env.example` or `.env.*.example`).
-- PHI, PII, or fixtures resembling real patient data.
-- OS junk: `.DS_Store`, `Thumbs.db`, `._*`, `Desktop.ini`, editor swap
-  / backup files, `*.swp`, `*.swo`, `*~`.
-- Build artifacts: `dist/`, `build/`, `node_modules/`, `.next/`,
-  `.turbo/`, `.cache/`, coverage output.
-- Files outside the agreed scope of the task.
+## Step 5 — Forbidden-content sweep
 
 Run a secrets scan on the working tree (`make secrets-scan`, or
-`gitleaks detect --no-banner --redact --source .` where available). If
-the scanner reports any finding, STOP.
+`gitleaks detect --no-banner --redact --source .` where available).
+If the scanner reports any finding, STOP. Also grep for obvious
+secret patterns and PHI-shaped fixtures; any hit is a STOP.
 
-## Step 4 — Summarize
+## Step 6 — Summarize
 
 Produce a written summary, shown to the human, containing:
 
-- The exact list of files that will be committed (full paths).
+- Tier classification + short rationale.
+- The exact list of files that will be committed.
 - A one-paragraph description of what changed and why.
-- The classification (low-risk / high-risk, with the list of areas).
+- The high-risk areas touched (if any).
 - The validations run and their results.
-- The proposed Conventional Commit message.
+- The proposed Conventional Commit message (including `Tier: N` line
+  and carry-forward list).
 
-Confirm the human's approval covers this exact summary. If anything
-differs from what they approved, STOP and reconfirm.
+For Tier 3, confirm the summary matches what the human approved. If
+anything differs, STOP and reconfirm.
 
-## Step 5 — Stage precisely
+## Step 7 — Stage precisely
 
 Stage ONLY the files named in the summary. Use explicit paths:
 
@@ -101,49 +132,25 @@ Stage ONLY the files named in the summary. Use explicit paths:
 git add -- <path> <path> …
 ```
 
-Do NOT use `git add .`, `git add -A`, or `git add -u`. Do NOT stage by
-glob or pattern.
+Do NOT use `git add .`, `git add -A`, or `git add -u`. Do NOT stage
+by glob or pattern.
 
 After staging, run `git diff --cached --stat` and `git diff --cached`.
 Confirm the staged content matches the summary exactly. If it does
 not, unstage with `git restore --staged -- <path>` and retry.
 
-## Step 6 — Craft the message
+## Step 8 — Commit
 
-Use Conventional Commits:
+Use Conventional Commits (`type(scope): subject`). The body MUST
+include:
 
-```
-<type>(<scope>): <subject>
+- Rationale / citations (ADRs, invariants).
+- A line **`Tier: N`** recording the classification.
+- A **carry-forward list** of intentionally deferred items (even if
+  the slice added nothing new — carry forward from prior slices).
 
-<body>
-
-<footer>
-```
-
-- `type` ∈ { `feat`, `fix`, `docs`, `refactor`, `test`, `chore`,
-  `build`, `ci`, `perf`, `style`, `revert`, `governance` }.
-- `scope` is the module or area (e.g., `schemas`, `api`, `web`,
-  `infra`, `ci`, `governance`).
-- `subject` is imperative mood, ≤72 characters, no trailing period.
-- `body` explains the *why*; reference invariants (`AGENTS.md` §3.x)
-  or ADR numbers where applicable.
-- `footer` references issues when relevant.
-
-The `Co-Authored-By` trailer is included only when the human has
-explicitly requested attribution, or when the repository's global
-commit convention requires it — otherwise omit.
-
-Examples:
-
-- `governance(agents): formalize controlled commit authority`
-- `docs(adr): add ADR-007 on tenant isolation strategy`
-- `chore(repo): add .editorconfig and harden .gitignore`
-
-## Step 7 — Commit
-
-Run a standard commit. Do NOT use `--amend`, `--no-verify`,
-`--no-gpg-sign`, or `--signoff` unless the human has explicitly asked.
-Prefer a HEREDOC for multi-line bodies.
+Do NOT use `--amend`, `--no-verify`, `--no-gpg-sign`, or `--signoff`
+unless the human has explicitly asked.
 
 Let pre-commit hooks run. If a hook fails:
 
@@ -151,26 +158,47 @@ Let pre-commit hooks run. If a hook fails:
 2. Report the failure output verbatim.
 3. Do NOT retry with `--no-verify`.
 4. Do NOT `--amend` — the prior commit did not occur; `--amend` would
-   modify the previous commit instead.
+   modify the PREVIOUS commit instead.
 5. Fix the underlying issue with the human's guidance, re-stage, and
    create a NEW commit in a fresh run of this skill.
 
-## Step 8 — Report
+## Step 9 — Push (tier-dependent)
 
-After a successful commit, report to the human:
+**Tier 1:** proceed directly to push with `git push origin main`.
+No phrase required. The universal guardrails in Step 2 still apply —
+if any condition changed between Step 8 and here, STOP.
 
-- Commit hash: `git rev-parse HEAD`.
-- Branch: `git branch --show-current`.
+**Tier 2:** STOP and request the exact phrase **"approved to push"**.
+Do not push before the human utters it. Once uttered, proceed to
+`git push origin main`.
+
+**Tier 3:** STOP and request the exact phrase **"approved to push"**.
+Do not push before the human utters it. Once uttered, proceed to
+`git push origin main`.
+
+Force-push to `main` or any protected branch is prohibited at every
+tier, including with "approved to push"; it requires a separate,
+written authorization naming the branch and the reason.
+
+## Step 10 — Report
+
+Report to the human:
+
+- Commit hash (`git rev-parse HEAD`).
+- Branch (`git branch --show-current`).
+- Tier classification.
 - The exact commit message.
 - Any hook output.
-- `git status --short` after the commit (should be clean, or show only
-  intentionally unstaged / untracked files with a note explaining why).
+- `git status --short` post-commit (expect clean; otherwise explain
+  each remaining entry).
+- Push status: pushed (hash range) or not-pushed-and-why.
 
 ## What this skill does NOT do
 
-This skill is **commit-only**. It never performs:
+This skill is commit-focused (and, for Tier 1, proceeds into push).
+It NEVER performs:
 
-- `git push` in any form.
+- `git push --force` or any force variant.
 - `git commit --amend`.
 - `git rebase` or `git merge`.
 - `git tag`.
@@ -178,12 +206,12 @@ This skill is **commit-only**. It never performs:
 - Any history rewriting.
 
 Those operations are governed by `AGENTS.md` §4.8 and require the
-phrase **"approved to push"** (and, for protected branches,
-additional named authorization).
+phrase **"approved to push"** at every tier, plus for force-push to
+protected branches an additional named authorization.
 
 ## Violations
 
 A commit made without satisfying every step above is a governance
 incident. The assistant MUST report it immediately, propose a
-remediation (typically: a follow-up revert commit plus redo under this
-skill), and await human direction.
+remediation (typically: a follow-up revert commit plus redo under
+this skill), and await human direction.

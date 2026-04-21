@@ -64,28 +64,52 @@ If a conflict cannot be reconciled, the assistant MUST halt and ask.
 
 ## Git commit and push authority
 
-Git authority is governed by `AGENTS.md` §4.7 (local commits) and §4.8
-(remote / destructive operations). In summary:
+Git authority is governed by `AGENTS.md` §§4.7–4.8 under the Tiered
+Execution Authority Model defined in
+[ADR-004](../../docs/adr/004-tiered-execution-authority-model.md).
+In summary:
 
-- Agents MUST NOT run `git commit` without the explicit session phrase
-  **"approved to commit"** AND full satisfaction of every condition in
-  `AGENTS.md` §4.7.
-- Agents MUST NOT run `git push`, any `--force` variant,
-  `git commit --amend`, `git rebase`, `git merge`, `git tag`, any
-  branch deletion, or any history-rewriting reset without the explicit
-  session phrase **"approved to push"**.
-- Approval phrases are **single-use** and scoped to the operation under
-  discussion. They do not authorize any later operation in the same
-  session, even if similar.
-- Commits touching **high-risk areas** (authentication, authorization,
-  audit logging, database migrations, infrastructure / Terraform,
-  dependency changes, encryption / secrets, PHI-handling paths,
-  FHIR / interoperability contracts, or governance files) REQUIRE an
-  explicit per-change approval in the same session — the generic
-  "approved to commit" alone is insufficient.
+- Every slice is classified **Tier 1 (safe)**, **Tier 2 (medium-risk)**,
+  or **Tier 3 (high-risk)** before commit, per the lists in
+  `AGENTS.md` §4.7.1.
+- **Classification tie-breaker:** if a slice spans multiple tiers, or
+  if the tier is ambiguous, the highest tier touched applies to the
+  entire slice. Mixed-tier slices are never classified down.
+- **Tier 3** touches authentication, authorization, audit logging,
+  non-additive migrations, `infra/**`, dependency manifests / lockfiles,
+  secrets, PHI paths, FHIR contracts, or governance files
+  (`AGENTS.md`, `.cursor/rules/**`, `.claude/**`, `docs/adr/**`,
+  `docs/architecture/**`). Tier 3 REQUIRES the exact session phrase
+  **"approved to commit"**, an explicit per-change approval naming the
+  high-risk area, and the exact phrase **"approved to push"** before
+  any push. All three are **single-use and scoped to the preceding turn**.
+- **Tier 2** touches strictly-additive migrations, new non-FHIR OpenAPI
+  contracts, new endpoints / controllers / services outside Tier 3
+  areas, production-posture-affecting test infrastructure, or
+  security-adjacent runbooks. Tier 2 permits autonomous commit;
+  pushing STILL requires **"approved to push"**.
+- **Tier 1** touches none of the above and carries no migrations, no
+  governance files, no security/audit code, no dependency manifest
+  changes, and no FHIR contracts. Tier 1 permits autonomous commit
+  AND push.
+- Every tier MUST satisfy the universal preconditions (`AGENTS.md`
+  §4.7.3) and universal guardrails (§4.7.4). Any failing test,
+  ADR/rule conflict, forbidden content, scope overrun, or
+  classification ambiguity forces a stop-and-flag report instead of a
+  commit.
 - Commit messages MUST follow **Conventional Commits**
-  (`type(scope): subject`).
-- The step-by-step commit procedure is in
+  (`type(scope): subject`) and MUST include a `Tier: N` line and a
+  carry-forward list in the body (§4.7.5–§4.7.6).
+- Override phrases (**"hold"**, **"review only"**, **"draft only"**,
+  **"do not commit"**, **"do not push"**) issued by the human in the
+  current session force a halt or Tier 3 treatment, overriding tier
+  autonomy.
+- Force-push, `--amend`, `rebase`, `merge` that creates merge commits,
+  `tag`, branch deletion, or any history-rewriting reset are
+  **prohibited at every tier** without **"approved to push"** AND the
+  operation being named/implied by the preceding turn. Force-pushing
+  to `main` requires an additional, named written authorization.
+- The step-by-step procedure is in
   `.claude/skills/safe-local-commit.md`. Agents MUST follow it every
   time.
 

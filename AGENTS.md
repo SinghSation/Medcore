@@ -181,26 +181,123 @@ Agents MUST NOT, without explicit human authorization in the same turn:
 Git-specific authorities are governed separately by §4.7 (local commits)
 and §4.8 (remote and destructive git operations).
 
-### 4.7 Controlled Git Commit Authority
+### 4.7 Controlled Git Commit Authority (Tiered)
 
-Agents MUST NOT create git commits by default.
+Agents operate under the **Tiered Execution Authority Model** defined
+in [ADR-004](./docs/adr/004-tiered-execution-authority-model.md). This
+section is a normative summary; the ADR is authoritative for tie-breaks.
 
-Agents MAY create a **LOCAL** git commit only when ALL of the following
-conditions are true:
+Every slice the agent commits MUST be classified into exactly one of
+three tiers before commit. The authority discipline below applies per
+tier. Regardless of tier, the agent MUST also satisfy the universal
+preconditions in §4.7.3 and the universal guardrails in §4.7.4.
 
-1. The human has explicitly said the phrase **"approved to commit"** in
-   the current session. Paraphrases ("go ahead", "commit it", "yes
-   commit", "lgtm") do NOT count.
-2. The requested task is complete within the agreed scope. Partial
+#### 4.7.1 Tier classification
+
+**Classification tie-breaker.** If a slice spans multiple tiers, or
+if the agent cannot unambiguously assign a single tier, **the highest
+tier touched applies to the entire slice**. Mixed-tier slices are
+never classified down. A single Tier 3 file riding alongside benign
+changes forces Tier 3 for the whole slice.
+
+**Tier 3 — High-risk (phrase-gated, named per-change approval).**
+A slice is Tier 3 if its diff touches ANY of:
+
+- Authentication.
+- Authorization.
+- Audit logging (code paths or emission sites).
+- Database migrations that are **not** strictly additive-and-idempotent
+  per Rule 03 §"Safety gates" (drops, in-place renames, NOT NULL on
+  populated columns, column-type narrowing, unique on populated
+  columns, non-trivial backfills, locking-budget-exceeding operations).
+- Infrastructure / Terraform (`infra/**`).
+- Dependency manifests or lockfiles with material transitive changes.
+- Encryption, key management, secrets handling.
+- PHI-handling code paths.
+- Interoperability / FHIR contracts (`packages/schemas/fhir/**`).
+- Governance files (`AGENTS.md`, `.cursor/rules/**`, `.claude/**`,
+  `docs/adr/**`, `docs/architecture/**`).
+- Any area the agent is not confident classifying.
+
+Tier 3 requires, in the current session:
+
+1. The exact phrase **"approved to commit"**. Paraphrases ("go ahead",
+   "commit it", "yes commit", "lgtm") do NOT count.
+2. An explicit per-change approval naming the high-risk area(s).
+3. The exact phrase **"approved to push"** before any push.
+
+All three are **single-use and scoped to the preceding turn** — see
+§4.8.
+
+**Tier 2 — Medium-risk (commit autonomous; push phrase-gated).**
+A slice is Tier 2 if it is not Tier 3 AND its diff touches ANY of:
+
+- **Purely additive Flyway migrations**, strictly defined (see
+  ADR-004 §2.1). Allowed: `CREATE TABLE` of new tables; `ADD COLUMN`
+  that is NULL-allowed with no default; `CREATE INDEX` on a new or
+  existing column; role/grant expansions; `CREATE SCHEMA` / `CREATE
+  TYPE` for new names. Forbidden (any → Tier 3): `DROP`, `RENAME`,
+  `ALTER COLUMN`, constraint addition on populated tables
+  (CHECK/UNIQUE/FK/NOT NULL), default changes, backfill of any size,
+  `TRUNCATE`, `REVOKE` that reduces grants, explicit lock/timeout
+  directives. Ambiguous → Tier 3.
+- New API contract files under `packages/schemas/openapi/**` (not FHIR).
+- New endpoints, controllers, or service classes outside Tier 3
+  areas AND outside the identity / tenancy / audit modules'
+  auth-sensitive code paths.
+- Test infrastructure that materially affects the test harness's
+  production-posture guarantees.
+- Developer runbooks touching security-adjacent topics that are not
+  themselves governance files.
+
+A slice whose diff includes an additive migration AND any Tier 3
+trigger is Tier 3 by the tie-breaker above.
+
+Tier 2 permits autonomous commit provided §§4.7.3 and 4.7.4 are
+satisfied. Pushing still requires the exact phrase
+**"approved to push"** (single-use, scoped to the preceding turn).
+
+**Tier 1 — Safe (autonomous commit AND push).**
+A slice is Tier 1 if none of the Tier 2 or Tier 3 criteria apply AND:
+
+- No database migrations of any kind.
+- No governance files.
+- No code under `platform/security/**`, `platform/audit/**`, or any
+  feature module's auth/authz/audit emission sites.
+- No dependency manifest or lockfile changes.
+- No FHIR or other interoperability contracts.
+
+Tier 1 permits autonomous commit AND push in one continuous pass
+provided §§4.7.3 and 4.7.4 are satisfied.
+
+#### 4.7.2 Override phrases
+
+Any of the following, issued by the human in the current session,
+overrides the default tier:
+
+- **"hold"** — pause all work.
+- **"review only"** / **"draft only"** — prepare the slice and review
+  pack; do not commit, do not push.
+- **"do not commit"** — as named.
+- **"do not push"** — as named; may commit if tier permits.
+- **"approved to commit"** / **"approved to push"** — explicit Tier 3
+  authority; supersedes tier autonomy.
+
+#### 4.7.3 Universal preconditions (all tiers)
+
+Every commit at every tier requires ALL of the following:
+
+1. The requested task is complete within the agreed scope. Partial
    work, half-finished refactors, and "checkpoint" commits are
    prohibited.
-3. The agent has shown the full list of changed files and has
-   summarized, in writing, what changed and why.
-4. All required validations for the touched area have been run in the
+2. The agent has shown the full list of changed files and has
+   summarized, in writing, what changed and why (the "review pack" or
+   its inline equivalent).
+3. All required validations for the touched area have been run in the
    current session and reported as passing: formatters, linters, type
    checks, tests, `make verify`, and any area-specific gates required
    by the `.cursor/rules/*.mdc` files that match the change.
-5. No forbidden content is staged. Forbidden content includes:
+4. No forbidden content is staged. Forbidden content includes:
    - Secrets, API keys, tokens, credentials, private keys, certificates.
    - `.env` files (only `.env.example` / `.env.*.example` are permitted).
    - PHI, PII, or fixtures resembling real patient data.
@@ -209,34 +306,57 @@ conditions are true:
    - Build artifacts (`dist/`, `build/`, `node_modules/`, `.next/`,
      `.turbo/`, coverage output).
    - Files outside the agreed scope of the task.
-6. The change does NOT touch a **high-risk area** unless the human has
-   explicitly authorized commit authority for that specific high-risk
-   change in the same session, naming the area.
+5. The commit body carries a **`Tier: N`** line plus a
+   **carry-forward list** enumerating intentionally deferred items.
 
-**High-risk areas** (a commit REQUIRES explicit per-change approval in
-the same session, in addition to the generic "approved to commit"):
+#### 4.7.4 Universal guardrails (all tiers)
 
-- Authentication.
-- Authorization.
-- Audit logging.
-- Database migrations (`**/migrations/**`).
-- Infrastructure / Terraform (`infra/**`).
-- Dependency changes (lockfiles, manifests, vendor directories).
-- Encryption, key management, and secrets handling.
-- PHI-handling code paths.
-- Interoperability / FHIR contracts (`packages/schemas/fhir/**`).
-- Governance files themselves (`AGENTS.md`, `.cursor/rules/**`,
-  `.claude/**`, `docs/adr/**`, `docs/architecture/**`).
+Agents MUST halt, produce a stop-and-flag report, and await human
+direction — regardless of tier — if ANY of the following is true:
+
+1. Any required test is failing.
+2. The diff appears to conflict with an accepted ADR.
+3. The diff appears to conflict with this document or any file under
+   `.cursor/rules/**`.
+4. Secrets, PHI, or any other forbidden pattern per §4.7.3 condition 4
+   is present.
+5. The implementation materially exceeds the reviewed scope.
+6. The slice touches a Tier 3 area that the review pack did not flag
+   or that the agent did not identify during classification.
+7. The agent cannot confidently classify the slice into a single tier.
+8. Migration safety is unclear (locking, backfill size, concurrent
+   writes).
+9. Pre-commit hooks fail.
+
+The stop-and-flag report cites the specific rule / ADR / file / line
+that triggered the stop and proposes the smallest compliant next step.
+
+#### 4.7.5 Carry-forward discipline
+
+Every final report and every commit message body MUST enumerate
+carry-forward items: work intentionally deferred, hardening notes not
+yet addressed, TODOs planted in code. An item introduced in slice N
+MUST appear in the carry-forward list of slice N+1 and is closed only
+when explicitly addressed (implemented, rejected with reason, or
+superseded by a new ADR). At each major phase boundary, the first
+slice MUST reconcile the accumulated carry-forward list from the prior
+phase.
+
+#### 4.7.6 Commit message
 
 Commit messages MUST follow **Conventional Commits**
-(`type(scope): subject`), with an imperative subject ≤72 characters and
-no trailing period. The body SHOULD cite the invariant(s) or ADR(s) the
-change relates to where applicable.
+(`type(scope): subject`), with an imperative subject ≤72 characters
+and no trailing period. The body SHOULD cite the invariant(s) or
+ADR(s) the change relates to. The body MUST include the tier
+classification and carry-forward list per §§4.7.3 and 4.7.5.
+
+#### 4.7.7 Post-commit report
 
 After a successful commit, the agent MUST report:
 
 - The commit hash.
 - The branch name.
+- The tier classification.
 - The exact commit message.
 - Any pre-commit hook output.
 - The result of `git status --short` post-commit.
@@ -248,11 +368,20 @@ any step is a governance incident.
 
 ### 4.8 Remote and Destructive Git Operations
 
-The following operations are **prohibited** unless the human has
-explicitly said the phrase **"approved to push"** in the current session
-(paraphrases do NOT count):
+The operations listed below are gated per-tier by §4.7:
 
-- `git push` (including pushing a new branch upstream).
+- **Tier 1**: `git push` (non-force, non-history-rewriting) is
+  permitted without an approval phrase, subject to §§4.7.3–4.7.4.
+- **Tier 2 and Tier 3**: `git push` is **prohibited** unless the human
+  has explicitly said the phrase **"approved to push"** in the current
+  session (paraphrases do NOT count). Single-use, scoped to the
+  preceding turn.
+
+The following operations are **prohibited at every tier** unless the
+human has explicitly said the phrase **"approved to push"** in the
+current session, AND the operation has been named or plainly implied
+by the preceding turn:
+
 - `git push --force`, `--force-with-lease`, or any force variant.
 - `git commit --amend` on any commit.
 - `git rebase` (interactive or non-interactive).
@@ -269,9 +398,9 @@ with** "approved to push". That operation REQUIRES a separate, written
 authorization that names the branch and the reason.
 
 Approval phrases are **single-use** and scoped to the specific
-operation discussed in the preceding turn. They do not carry forward to
-later operations in the same session. A new operation requires a new
-approval.
+operation discussed in the preceding turn. They do not carry forward
+to later operations in the same session. A new operation requires a
+new approval.
 
 ---
 
