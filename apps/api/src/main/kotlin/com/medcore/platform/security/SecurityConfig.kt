@@ -1,5 +1,6 @@
 package com.medcore.platform.security
 
+import com.medcore.platform.audit.AuditWriter
 import com.medcore.platform.config.MedcoreOidcProperties
 import java.time.Clock
 import org.springframework.context.annotation.Bean
@@ -13,6 +14,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder
 import org.springframework.security.oauth2.jwt.JwtDecoders
 import org.springframework.security.oauth2.jwt.JwtValidators
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
+import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
 
 // Platform-wide Spring Security configuration. Stateless resource-server
@@ -20,6 +22,11 @@ import org.springframework.security.web.SecurityFilterChain
 // JWT; the bearer is validated against the issuer URI from
 // MedcoreOidcProperties. There is no "auth disabled in dev" switch
 // (Rule 01, ADR-002 §3).
+//
+// At 3C the resource-server uses AuditingAuthenticationEntryPoint so that
+// invalid-bearer 401s emit identity.user.login.failure audit rows
+// (ADR-003 §7). Anonymous requests (no Authorization header) still return
+// 401 but are NOT audited — see the entry point for rationale.
 @Configuration(proxyBeanMethods = false)
 class SecurityConfig {
 
@@ -52,9 +59,14 @@ class SecurityConfig {
         MedcoreJwtAuthenticationConverter(oidcProperties, principalResolver)
 
     @Bean
+    fun auditingAuthenticationEntryPoint(auditWriter: AuditWriter): AuthenticationEntryPoint =
+        AuditingAuthenticationEntryPoint(auditWriter)
+
+    @Bean
     fun apiSecurityFilterChain(
         http: HttpSecurity,
         converter: MedcoreJwtAuthenticationConverter,
+        auditingEntryPoint: AuthenticationEntryPoint,
     ): SecurityFilterChain {
         http
             .securityMatcher("/api/**")
@@ -65,7 +77,9 @@ class SecurityConfig {
                 oauth2.jwt { jwt ->
                     jwt.jwtAuthenticationConverter(converter)
                 }
+                oauth2.authenticationEntryPoint(auditingEntryPoint)
             }
+            .exceptionHandling { it.authenticationEntryPoint(auditingEntryPoint) }
             .httpBasic { it.disable() }
             .formLogin { it.disable() }
             .logout(Customizer.withDefaults())

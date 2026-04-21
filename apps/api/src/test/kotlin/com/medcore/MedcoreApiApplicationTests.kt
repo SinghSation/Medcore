@@ -70,6 +70,7 @@ class MedcoreApiApplicationTests {
                 Row("4", "V4__identity_user.sql", true),
                 Row("5", "V5__tenant.sql", true),
                 Row("6", "V6__tenant_membership.sql", true),
+                Row("7", "V7__audit_event.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

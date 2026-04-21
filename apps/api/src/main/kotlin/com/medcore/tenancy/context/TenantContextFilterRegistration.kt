@@ -1,6 +1,7 @@
 package com.medcore.tenancy.context
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.medcore.platform.audit.AuditWriter
 import com.medcore.platform.tenancy.TenantMembershipLookup
 import org.springframework.boot.autoconfigure.security.SecurityProperties
 import org.springframework.boot.web.servlet.FilterRegistrationBean
@@ -51,7 +52,9 @@ class TenantContextFilterRegistration {
         tenantContext: TenantContext,
         membershipLookup: TenantMembershipLookup,
         objectMapper: ObjectMapper,
-    ): TenantContextFilter = TenantContextFilter(tenantContext, membershipLookup, objectMapper)
+        auditWriter: AuditWriter,
+    ): TenantContextFilter =
+        TenantContextFilter(tenantContext, membershipLookup, objectMapper, auditWriter)
 
     @Bean
     fun tenantContextFilterServletRegistration(

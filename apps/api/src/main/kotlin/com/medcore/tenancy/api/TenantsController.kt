@@ -5,6 +5,7 @@ import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.TenantStatus
 import com.medcore.tenancy.service.MembershipDetail
 import com.medcore.tenancy.service.TenancyService
+import com.medcore.tenancy.service.TenantMembershipResult
 import org.springframework.http.MediaType
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.GetMapping
@@ -20,9 +21,11 @@ import org.springframework.web.bind.annotation.RestController
 // in this slice; tenancy.context.TenantContextFilter validates it when
 // present so future routes can adopt it without reinventing the wheel.
 //
-// Only ACTIVE memberships on ACTIVE tenants are returned from the list
-// endpoint or resolved on the per-slug /me endpoint — everything else is
-// indistinguishable 403 by design (no enumeration signal).
+// Audit emission lives in the tenancy service, not here (Phase 3C scope
+// rule: "never emit audit from controllers"). The controller only maps
+// the service's sealed TenantMembershipResult into an HTTP response —
+// the denial audit row has already been written by the time the
+// exception is thrown.
 @RestController
 @RequestMapping("/api/v1/tenants")
 class TenantsController(
@@ -42,23 +45,16 @@ class TenantsController(
     fun membershipForCurrentUser(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
-    ): MembershipResponse {
-        val detail = tenancyService.findMembershipBySlug(principal.userId, slug)
-            ?: throw TenantAccessDeniedException(
-                "no membership for userId=${principal.userId} slug=$slug",
-            )
-        if (!detail.isAccessible()) {
-            throw TenantAccessDeniedException(
-                "membership not accessible for userId=${principal.userId} slug=$slug " +
-                    "membershipStatus=${detail.status} tenantStatus=${detail.tenant.status}",
-            )
-        }
-        return detail.toResponse()
+    ): MembershipResponse = when (
+        val result = tenancyService.findMembershipForCallerBySlug(principal.userId, slug)
+    ) {
+        is TenantMembershipResult.Granted -> result.detail.toResponse()
+        is TenantMembershipResult.Denied -> throw TenantAccessDeniedException(
+            "denied userId=${principal.userId} slug=$slug reason=${result.reason.code}",
+        )
     }
 
-    private fun MembershipDetail.isVisibleOnList(): Boolean = isAccessible()
-
-    private fun MembershipDetail.isAccessible(): Boolean =
+    private fun MembershipDetail.isVisibleOnList(): Boolean =
         status == MembershipStatus.ACTIVE && tenant.status == TenantStatus.ACTIVE
 
     private fun MembershipDetail.toResponse(): MembershipResponse = MembershipResponse(

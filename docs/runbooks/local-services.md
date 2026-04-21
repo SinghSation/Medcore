@@ -204,7 +204,72 @@ SHOW timezone;                          -- UTC
   (§7) and recreate, or run `ALTER USER ... WITH PASSWORD '...'`
   manually inside `psql`.
 
-## 11. Related
+## 11. Audit role (Phase 3C)
+
+The V7 migration creates a `medcore_app` Postgres role and applies the
+ADR-003 §2 immutability grants to `audit.audit_event`:
+
+- `GRANT INSERT, SELECT ON audit.audit_event TO medcore_app`
+- `REVOKE UPDATE, DELETE, TRUNCATE ON audit.audit_event FROM medcore_app`
+
+The role is created **without a password** so the committed migration
+carries no secret. In production, ops sets the role's password from the
+secret manager and configures the application's datasource to connect
+as `medcore_app`.
+
+### Phase 3C scope — explicit deferral of the runtime app-role switch
+
+Phase 3C **does NOT** flip the running application's datasource to
+`medcore_app`. Locally and in tests the app process continues to
+connect as the container superuser (`medcore`). This is a deliberate,
+bounded scope decision, NOT an oversight. The reasoning:
+
+- The ADR-003 §2 invariant — *the app role cannot UPDATE/DELETE audit
+  rows* — is structurally enforced by the V7 grants and is exercised
+  by `AuditImmutabilityTest`, which connects directly AS `medcore_app`
+  and asserts that every forbidden operation fails at the DB layer.
+  The grant model is real, applied, and tested.
+- Switching the running datasource to `medcore_app` requires:
+  splitting the Flyway datasource (which needs DDL privileges) from
+  the application JPA datasource (which needs only DML on identity /
+  tenancy and INSERT/SELECT on audit), wiring a secret-manager-backed
+  password, and granting `medcore_app` the appropriate DML rights on
+  every existing application schema (`identity.user`,
+  `tenancy.tenant`, `tenancy.tenant_membership`).
+- That work belongs to a dedicated ops slice, not to the audit
+  pipeline implementation. Bundling it here would either pull a real
+  secret-manager dependency into Phase 3C or commit a "local password"
+  string to the repo — both of which are worse than the explicit
+  deferral.
+
+Tracked carry-forward for the next operational hardening slice (and
+for the eventual Phase 3D RLS work, which assumes the runtime role
+split is in place).
+
+To exercise the role manually in your local cluster:
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "ALTER ROLE medcore_app WITH PASSWORD 'local-only-do-not-reuse';"
+
+PGPASSWORD='local-only-do-not-reuse' psql \
+  -h localhost -p "${POSTGRES_PORT:-5432}" \
+  -U medcore_app -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "SELECT count(*) FROM audit.audit_event;"
+# expected: works
+PGPASSWORD='local-only-do-not-reuse' psql \
+  -h localhost -p "${POSTGRES_PORT:-5432}" \
+  -U medcore_app -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "DELETE FROM audit.audit_event;"
+# expected: ERROR: permission denied for table audit_event
+```
+
+Switching the running app to connect as `medcore_app` is an ops task
+tracked for a later slice (it requires datasource property plumbing and
+a secret-manager wiring that lives outside this phase).
+
+## 12. Related
 
 - **ADR-001** — PostgreSQL + Flyway + row-level tenancy.
 - `.cursor/rules/03-db-migrations.mdc` — migration rules (applies
