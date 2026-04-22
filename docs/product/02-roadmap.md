@@ -961,7 +961,7 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | MEMBERSHIP_SUSPENDED → NOT_A_MEMBER collapse at tenant-SELECT layer (V8's tenant policy, distinct from V13's membership expansion) | 3J.2 | **Phase 4A+** (when caller-suspended visibility matters for clinical surfaces) |
 | Audit payload column / structured mutation diff (before/after) | 3J.2 | **Phase 7** (compliance-driven ADR) |
 | `If-Match` precondition header on PATCH | 3J.2 | **3J.N or 3L** (when a client demands it) |
-| ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I** (CI substrate lands) |
+| ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I.1** (closed — 12 rules landed) |
 | `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A** (first PHI write) |
 | `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint | 3J.3 | **3J.N** (closed) |
 | `DELETE /memberships/{id}` member-removal endpoint | 3J.3 | **3J.N** (closed) |
@@ -972,11 +972,7 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.N membership role-update +
-revocation slice — closes 2 of the 3 3J.3-opened carry-forwards
-and partially closes the 3J.2 SECURITY DEFINER resolver; adds
-2 new 3J.N-opened rows for deferred-trigger + structured audit
-columns; splits the SUSPENDED-collapse carry-forward to clarify
-the tenant-layer portion remains open).
-Next review: 2026-07-22 (quarterly). Review cadence aligned with
-competitive-landscape review cadence.*
+*Last reviewed: 2026-04-22 (Phase 3I.1 ArchUnit slice — closes
+the 3J.2 WriteGate-exclusivity carry-forward into 12 CI-enforced
+rules). Next review: 2026-07-22 (quarterly). Review cadence
+aligned with competitive-landscape review cadence.*

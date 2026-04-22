@@ -1099,12 +1099,107 @@ discipline, and the escalation-guard pattern.
   - Custom MembershipRole deserialiser for 422 on invalid enum
     (still valid for 3J.N's PATCH body parsing)
 
-### 3.5 Phases 3I, 3K, 3L, 3M
+### 3.5 Phase 3I — Deployment baseline + CI enforcement
+
+Phase 3I splits into multiple sub-slices per the roadmap (ArchUnit
+governance, CI pipeline, Terraform dev environment, AWS Secrets
+Manager implementation, deploy-on-merge workflow). Sub-slices land
+independently so governance gates (3I.1/3I.2) can precede
+infrastructure (3I.3+).
+
+#### 3.5.1 Phase 3I.1 — ArchUnit machine-enforced invariants
+
+Closes the ADR-007 §2.10 "review-gated until 3I" carry-forward
+into CI-enforced rules that fail the build on any PR violating
+the mutation perimeter, module boundaries, or audit discipline.
+
+- [ ] `com.tngtech.archunit:archunit-junit5:1.3.0` added as
+      `testImplementation`; wired into the normal `./gradlew test`
+      task (no separate `archTest` task — lightweight rules
+      don't warrant the split).
+- [ ] Three test suites in
+      `apps/api/src/test/kotlin/com/medcore/architecture/`:
+  - `MutationBoundaryArchTest` (rules 1–5, 12)
+  - `ModuleBoundaryArchTest` (rules 6–8)
+  - `SecurityDisciplineArchTest` (rules 9–11, split 10 into
+    class-level + method-level)
+- [ ] **Mutation-boundary rules.**
+  - Rule 1: JPA repositories accessed only from `..write..`,
+    `..service..`, `..persistence..`, `..platform..`, `..identity..`.
+  - Rule 2: `JpaRepository.save / saveAll / delete / deleteById /
+    deleteAll / deleteAllById` called only from `..write..`,
+    `..identity..`, `..persistence..`.
+  - Rule 3: Controllers (`..api..`) do NOT reference JPA
+    repositories at all (strict — reads go through services).
+  - Rule 4: `AuthzPolicy` implementations reside in `..write..`.
+  - Rule 5: `WriteAuditor` implementations reside in `..write..`.
+  - **Rule 12 (entry-point exclusivity):**
+    `WriteGate.apply(...)` is invoked only from classes in
+    `..api..` packages.
+- [ ] **Module-boundary rules.**
+  - Rule 6: Identity does not depend on tenancy.
+  - Rule 7: Tenancy does not depend on `identity.persistence..`
+    or `identity.service..` (narrow `..write..` exception
+    documented for `existsById` reads in
+    `InviteTenantMembershipHandler`).
+  - Rule 8: `platform.audit..` does not depend on business
+    modules (keeps the dependency arrow one-way).
+- [ ] **Security-discipline rules.**
+  - Rule 9: `AuditEventCommand` constructed only in `..write..`,
+    `..service..`, `..audit..`, `..persistence..`, and the
+    explicitly allow-listed cross-cutting pre-controller hooks
+    (`..identity..`, `com.medcore.platform.security..`,
+    `com.medcore.tenancy.context..`). Each allow-listed package
+    has KDoc explaining why no handler layer exists at that
+    emission site.
+  - Rule 10 (class-level): No `@Transactional` on controller
+    classes (`..api..`).
+  - Rule 10 (method-level): No `@Transactional` on controller
+    methods.
+  - Rule 11: `AuditAction` references live only in sanctioned
+    layers (same allow-list as Rule 9 + `platform.audit..`).
+- [ ] **Every rule carries a descriptive `.as(...)` message**
+      pointing at the architectural contract + relevant ADR
+      section. CI failure tells the contributor exactly which
+      invariant they violated and how to fix.
+- [ ] **Allow-listed exceptions documented in KDocs:**
+      `IdentityProvisioningService` JIT provisioning emits
+      audit pre-controller; `AuditingAuthenticationEntryPoint`
+      emits 401-audit via Spring Security entry point;
+      `TenantContextFilter` emits tenant-context audit at
+      filter time. All three run BEFORE any controller dispatch,
+      so the "domain-emits-audit" principle routes through
+      pre-controller infrastructure instead.
+- [ ] All existing 301 tests still green; +13 ArchUnit rule
+      tests added. **314/314 across 57 suites**.
+- [ ] ADR-007 §2.10 updated: "Review-gated until Phase 3I" →
+      "Machine-enforced in Phase 3I.1 via 12 ArchUnit rules"
+      with enumeration + rationale for each allow-listed
+      cross-cutting exception.
+- [ ] Carry-forward closed in 3I.1:
+  - "ArchUnit rule: WriteGate is exclusive mutation entry point"
+    (3J.2 → 3I.1) — rule 12 lands.
+- [ ] Carry-forward opened by 3I.1 (none new; all captured
+      allow-list items are narrow + KDoc-documented, not
+      future-scope carry-forwards).
+
+#### 3.5.2 Phase 3I.2+ — CI pipeline + Terraform + deployment
+
+<!-- TODO(content): populated as each 3I sub-slice opens:
+     - 3I.2: GitHub Actions with gradle test / ktlintCheck /
+       detekt / Flyway validate / Gitleaks / Roadmap-Phase
+       trailer check / doc-staleness check
+     - 3I.3: Dockerfile + build-info plugin
+     - 3I.4: Terraform dev environment
+     - 3I.5: AWS Secrets Manager real implementation
+     - 3I.6: Deploy-on-merge workflow -->
+
+### 3.6 Phases 3K, 3L, 3M
 
 <!-- TODO(content): per-phase checklists populated as each phase opens
      per ADR-005 §2.4 (living-per-slice cadence). -->
 
-### 3.6 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.7 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
@@ -1124,8 +1219,10 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.N DoD populated — two
-endpoints + first aggregate-state invariant; §3.4.4 last-OWNER
-row added with ADR-007 §2.12/§2.13/§2.14 framework extensions).
+*Last reviewed: 2026-04-22 (Phase 3I.1 ArchUnit DoD populated —
+12 machine-enforced rules across mutation boundary, module
+boundaries, and audit/security discipline; closes the 3J.2
+review-gated WriteGate-exclusivity carry-forward; ADR-007 §2.10
+updated from review-gated to machine-enforced).
 Next review: 2026-05-22, or on the next phase opening (whichever
 is sooner).*

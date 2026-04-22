@@ -65,6 +65,11 @@ dependencies {
     // Phase 3F.2 — in-memory OTel SDK for PHI-leakage assertions
     // against span attributes. Test-only; not shipped.
     testImplementation("io.opentelemetry:opentelemetry-sdk-testing")
+    // Phase 3I.1 — machine-enforced architectural invariants
+    // (WriteGate exclusivity, repository-access perimeter, module
+    // boundaries, audit discipline). Rules live in
+    // apps/api/src/test/kotlin/com/medcore/architecture/.
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

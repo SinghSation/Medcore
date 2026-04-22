@@ -175,19 +175,47 @@ This is a Tier 3 change to `02-roadmap.md` per ADR-005 §2.3
 
 ### 2.10 WriteGate is the exclusive mutation entry point
 
-**Added post-3J.1 pressure test.** Every state-changing operation
-on a Medcore domain entity MUST flow through `WriteGate.apply()`.
-Direct repository mutations (`repository.save(...)`,
-`repository.delete(...)`, `@Modifying` JPQL) outside a
-`WriteGate.apply` invocation are forbidden for domain entities.
-Exemptions: audit writes (`JdbcAuditWriter.write` — the audit row
-IS the governed artifact), chain-verification bookkeeping, and
-Flyway migrations (owned by `medcore_migrator`, not the app).
+**Added post-3J.1 pressure test; machine-enforced in Phase 3I.1.**
+Every state-changing operation on a Medcore domain entity MUST
+flow through `WriteGate.apply()`. Direct repository mutations
+(`repository.save(...)`, `repository.delete(...)`, `@Modifying`
+JPQL) outside a `WriteGate.apply` invocation are forbidden for
+domain entities. Exemptions: audit writes (`JdbcAuditWriter.write`
+— the audit row IS the governed artifact), chain-verification
+bookkeeping, and Flyway migrations (owned by `medcore_migrator`,
+not the app).
 
-Review-gated until Phase 3I, where an ArchUnit rule lands in CI.
-Until then, the discipline is enforced by review: any PR
-introducing a domain-entity `.save(...)` outside a handler-under-
-WriteGate is rejected.
+**Phase 3I.1 lands 12 ArchUnit rules** that fail CI on any PR
+violating the mutation perimeter. Rules live in
+`apps/api/src/test/kotlin/com/medcore/architecture/` and run as
+part of the normal `./gradlew test` task. Rule families:
+
+- **Mutation-boundary (6 rules).** JPA repositories accessed
+  only from sanctioned packages; `save`/`delete`/`saveAll`/
+  `deleteById`/`deleteAll`/`deleteAllById` called only from
+  `.write` or `.identity`; controllers don't reference
+  repositories (strict — even read queries go through services);
+  `AuthzPolicy` + `WriteAuditor` implementations live in `.write`
+  packages; `WriteGate.apply(...)` called only from `.api`
+  packages (Rule 12 — entry-point exclusivity complements
+  Rules 1–2's exit-point exclusivity).
+- **Module-boundary (3 rules).** Identity doesn't depend on
+  tenancy or audit business modules; tenancy doesn't depend on
+  identity persistence/service layers (narrow `.write`
+  exception documented in `InviteTenantMembershipHandler` for
+  `existsById` reads); audit doesn't depend on business modules.
+- **Security-discipline (3 rules).** `AuditEventCommand`
+  constructed only in sanctioned layers (domain + allow-listed
+  cross-cutting pre-controller hooks); `@Transactional` not on
+  controller classes or methods; `AuditAction` enum references
+  only in sanctioned layers.
+
+Cross-cutting pre-controller hooks (`IdentityProvisioningService`
+for JIT provisioning, `AuditingAuthenticationEntryPoint` for 401
+audit, `TenantContextFilter` for tenant-context set/denied) are
+explicit allow-listed — each runs BEFORE any controller dispatch,
+so there's no handler layer to route through. Documented in the
+rule KDocs with the rationale for each allow.
 
 ### 2.11 `WriteTxHook` — caller-dependent tx-local state
 
