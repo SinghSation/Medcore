@@ -1,5 +1,5 @@
 ---
-status: Draft
+status: Active
 last_reviewed: 2026-04-21
 next_review: 2026-05-05
 cadence: stable-amended-on-phase-close
@@ -73,19 +73,98 @@ threshold or committing to the fix.
 ## 3. Per-phase DoD
 
 Each phase row in `02-roadmap.md` has an **Exit** clause. This
-section expands each with the phase-specific checklist.
+section expands each with the phase-specific checklist. Phases land
+here as they open; pre-open phases carry a `TODO(content)` marker
+until their first slice begins.
 
-<!-- TODO(content): per-phase checklists populated in follow-up
-     Tier 2 slice. Structure:
+### 3.1 Phase 3F — Observability spine
 
-     ### 3.X Phase NNN
+Phase 3F is divided into four sub-slices; each sub-slice has its own
+exit criteria and closes carry-forward items individually. The phase
+itself closes when all four sub-slices have landed AND no 3F-scope
+carry-forward item remains open.
+
+#### 3.1.1 Phase 3F.1 — Request-id + structured logging
+
+- [ ] Every inbound HTTP request carries a `request_id` in all of:
+      MDC, response header (when `echo-on-response` is true),
+      `audit.audit_event.request_id` column, and at least one log
+      line emitted during the request lifecycle.
+- [ ] Inbound `X-Request-Id` is accepted only when it matches the
+      configured format regex AND is within the configured
+      max-length; malformed/overlong values are replaced by a fresh
+      UUIDv4 without error.
+- [ ] Proxy-aware `client_ip` resolver in place:
+  - Empty trusted-proxy list → `X-Forwarded-For` is IGNORED and
+    `remote_addr` is returned verbatim (dev / test default).
+  - Non-empty trusted-proxy list → XFF is walked right-to-left and
+    the first untrusted entry is returned as client IP.
+- [ ] MDC carries `request_id`, `tenant_id` (when header-resolved),
+      `user_id` (when authenticated) throughout the request thread
+      lifetime; cleared in a `finally` block so no value leaks to
+      pooled threads.
+- [ ] Structured JSON logging enabled via Spring Boot 3.4 built-in
+      (`logging.structured.format.console`). Default format `ecs`;
+      override via `MEDCORE_LOG_FORMAT`.
+- [ ] `RequestIdAuditCorrelationTest` passes end-to-end — the
+      single load-bearing test for this sub-slice — proving a single
+      id appears across response header, MDC, log line, and audit
+      row.
+- [ ] `LogPhiLeakageTest` passes — asserts known PHI/credential
+      tokens (bearer, email, display name) do not appear in emitted
+      log output.
+- [ ] Structured logging contract asserted without over-fitting to a
+      specific vendor layout (valid JSON + `request_id` + level +
+      logger + message present).
+- [ ] `RequestIdFilter` is registered BEFORE Spring Security
+      (`SecurityProperties.DEFAULT_FILTER_ORDER - 10`), so 401
+      responses and auth-entry-point audits carry the correlation
+      id. Verified by registration test.
+- [ ] `MdcUserIdFilter` is registered AFTER Spring Security
+      (`SecurityProperties.DEFAULT_FILTER_ORDER + 5`), populating
+      `user_id` from the authenticated principal. Verified by
+      registration test.
+- [ ] PHI-exposure review: `docs/security/phi-exposure-review-3f-1.md`
+      landed.
+- [ ] Runbook updated: `docs/runbooks/observability.md` describes
+      env vars, log format, and correlation queries.
+- [ ] Carry-forward closed: central request-ID generator (from 3C);
+      proxy-aware `client_ip` extraction (from 3C).
+- [ ] Existing 74/74 tests still green; new tests added for
+      `RequestIdFilter`, `ProxyAwareClientIpResolver`,
+      `MdcUserIdFilter`, end-to-end correlation, PHI-leakage, and
+      filter registration.
+
+#### 3.1.2 Phase 3F.2 — OpenTelemetry traces/metrics
+
+<!-- TODO(content): populated when 3F.2 opens. -->
+
+#### 3.1.3 Phase 3F.3 — Health and readiness probes
+
+<!-- TODO(content): populated when 3F.3 opens. -->
+
+#### 3.1.4 Phase 3F.4 — Chain verification scheduled job
+
+<!-- TODO(content): populated when 3F.4 opens. -->
+
+### 3.2 Phases 3G, 3H, 3I, 3J, 3K, 3L, 3M
+
+<!-- TODO(content): per-phase checklists populated as each phase opens
+     per ADR-005 §2.4 (living-per-slice cadence). Structure template:
+
+     #### 3.X Phase NNN
      - [ ] Exit criterion summary
      - [ ] Specific test coverage
      - [ ] Specific audit events present
      - [ ] Specific artifacts (runbooks, ADRs, etc.) landed
-     - [ ] Workflow benchmarks met (where applicable)
+     - [ ] Workflow benchmarks met (where applicable — Phase 4+ only)
      - [ ] Carry-forward resolved
 -->
+
+### 3.3 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+
+<!-- TODO(content): populated as each phase opens. Phase 4+ DoD
+     entries include the workflow-benchmark-met assertion per §2. -->
 
 ## 4. Production-readiness checklist (Phase 6D onwards)
 
@@ -102,5 +181,6 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-21 (skeleton + workflow benchmarks).
-Next review: 2026-05-05 (per-phase detail population).*
+*Last reviewed: 2026-04-21 (Phase 3F.1 DoD populated alongside its
+first slice). Next review: 2026-05-05, or on the next phase opening
+(whichever is sooner).*

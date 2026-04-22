@@ -8,6 +8,7 @@ import com.medcore.platform.audit.AuditAction
 import com.medcore.platform.audit.AuditEventCommand
 import com.medcore.platform.audit.AuditOutcome
 import com.medcore.platform.audit.AuditWriter
+import com.medcore.platform.observability.MdcKeys
 import com.medcore.platform.security.MedcorePrincipal
 import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.ResolvedMembership
@@ -17,6 +18,7 @@ import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import java.util.UUID
+import org.slf4j.MDC
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.security.core.context.SecurityContextHolder
@@ -90,7 +92,16 @@ class TenantContextFilter(
         requireNotNull(resolved)
         tenantContext.set(resolved)
         auditContextSet(principal.userId, resolved)
-        filterChain.doFilter(request, response)
+        // Populate MDC with tenant_id for structured logging and any
+        // downstream audit emission on this request thread. Cleared in
+        // the `finally` so the value never leaks to pooled threads
+        // after the request completes.
+        MDC.put(MdcKeys.TENANT_ID, resolved.tenantId.toString())
+        try {
+            filterChain.doFilter(request, response)
+        } finally {
+            MDC.remove(MdcKeys.TENANT_ID)
+        }
     }
 
     private fun ResolvedMembership?.denialReason(): HeaderDenialReason? {

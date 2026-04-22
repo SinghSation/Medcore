@@ -79,6 +79,36 @@ medcore:
     audience: ${MEDCORE_OIDC_AUDIENCE:}
     clock-skew: ${MEDCORE_OIDC_CLOCK_SKEW:30s}
 
+  observability:
+    # Phase 3F.1 — request-id + structured logging substrate.
+    # Defaults are production-safe: inbound X-Request-Id is accepted
+    # only when it matches the UUID format regex AND is within
+    # max-length; otherwise a fresh UUIDv4 is minted. X-Forwarded-For
+    # is IGNORED unless a trusted-proxy list is explicitly configured
+    # (no spoofable default).
+    request-id:
+      header-name: ${MEDCORE_REQUEST_ID_HEADER:X-Request-Id}
+      id-format: ${MEDCORE_REQUEST_ID_FORMAT:^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$}
+      max-length: ${MEDCORE_REQUEST_ID_MAX_LENGTH:128}
+      echo-on-response: ${MEDCORE_REQUEST_ID_ECHO:true}
+    proxy:
+      # Comma-separated list of trusted proxy IPs or CIDR ranges.
+      # Configure at deploy time (ALB / CloudFront / CDN egress). Empty
+      # in dev / tests — X-Forwarded-For is NOT read and the immediate
+      # peer's remote address is returned verbatim.
+      trusted-proxies: ${MEDCORE_TRUSTED_PROXIES:}
+      forwarded-for-header: ${MEDCORE_FORWARDED_FOR_HEADER:X-Forwarded-For}
+
+# Structured logging (Spring Boot 3.4). ECS = Elastic Common Schema —
+# a well-defined field set supported by Elastic, Datadog, CloudWatch
+# Logs Insights, and most log-aggregation vendors. Operators can
+# override via MEDCORE_LOG_FORMAT if their target platform prefers
+# a different format (logstash, gelf).
+logging:
+  structured:
+    format:
+      console: ${MEDCORE_LOG_FORMAT:ecs}
+
 server:
   port: 8080
   shutdown: graceful
