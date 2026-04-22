@@ -1,15 +1,27 @@
 package com.medcore.tenancy.api
 
+import com.medcore.platform.observability.MdcKeys
 import com.medcore.platform.security.MedcorePrincipal
 import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.TenantStatus
+import com.medcore.platform.write.WriteContext
+import com.medcore.platform.write.WriteGate
+import com.medcore.platform.write.WriteResponse
 import com.medcore.tenancy.service.MembershipDetail
 import com.medcore.tenancy.service.TenancyService
 import com.medcore.tenancy.service.TenantMembershipResult
+import com.medcore.tenancy.write.TenantSnapshot
+import com.medcore.tenancy.write.UpdateTenantDisplayNameCommand
+import com.medcore.tenancy.write.UpdateTenantDisplayNameHandler
+import jakarta.validation.Valid
+import org.slf4j.MDC
 import org.springframework.http.MediaType
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
@@ -30,6 +42,8 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/v1/tenants")
 class TenantsController(
     private val tenancyService: TenancyService,
+    private val updateTenantDisplayNameGate: WriteGate<UpdateTenantDisplayNameCommand, TenantSnapshot>,
+    private val updateTenantDisplayNameHandler: UpdateTenantDisplayNameHandler,
 ) {
 
     @GetMapping(produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -51,6 +65,52 @@ class TenantsController(
         is TenantMembershipResult.Granted -> result.detail.toResponse()
         is TenantMembershipResult.Denied -> throw TenantAccessDeniedException(
             "denied userId=${principal.userId} slug=$slug reason=${result.reason.code}",
+        )
+    }
+
+    /**
+     * First concrete write through the Phase 3J.1 WriteGate substrate
+     * (Phase 3J.2, ADR-007 §4). Display-name updates only — status
+     * changes, slug changes, and deletion remain out of scope until a
+     * subsequent slice.
+     *
+     * Flow: `@Valid` → `UpdateTenantDisplayNameValidator` →
+     * `UpdateTenantDisplayNamePolicy` (via `WriteGate`) →
+     * `UpdateTenantDisplayNameHandler` (inside the gate's transaction)
+     * → `UpdateTenantDisplayNameAuditor.onSuccess` (same transaction) →
+     * response. Denial fires `AUTHZ_WRITE_DENIED` via the auditor's
+     * `onDenied` path and re-throws; Phase 3G maps the
+     * `WriteAuthorizationException` to `403 auth.forbidden`.
+     */
+    @PatchMapping(
+        "/{slug}",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun updateTenant(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @Valid @RequestBody body: UpdateTenantRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): WriteResponse<TenantSummaryResponse> {
+        val command = UpdateTenantDisplayNameCommand(
+            slug = slug,
+            // `!!` codifies the @Valid @NotBlank guarantee: if we reach
+            // this line, Spring has already rejected null / empty bodies
+            // with 422. Trimming here normalises the value before the
+            // validator's post-trim-emptiness + control-chars checks.
+            displayName = body.displayName!!.trim(),
+        )
+        val context = WriteContext(
+            principal = principal,
+            idempotencyKey = idempotencyKey,
+        )
+        val snapshot = updateTenantDisplayNameGate.apply(command, context) { cmd ->
+            updateTenantDisplayNameHandler.handle(cmd)
+        }
+        return WriteResponse(
+            data = TenantSummaryResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
     }
 

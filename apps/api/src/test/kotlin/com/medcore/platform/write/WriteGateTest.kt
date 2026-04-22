@@ -163,6 +163,54 @@ class WriteGateTest {
     }
 
     @Test
+    fun `txHook runs inside the transaction, after authz and before execute`() {
+        val order = mutableListOf<String>()
+        val policy = AuthzPolicy<TestCommand> { _, _ -> order += "authz" }
+        val auditor = RecordingAuditor<TestCommand, TestResult>(onSuccessTag = "audit", order = order)
+        val hook = WriteTxHook { _ -> order += "hook" }
+
+        val gate = WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = NoopTxManager(),
+            validator = null,
+            txHook = hook,
+        )
+
+        val result = gate.apply(TestCommand("x"), context) {
+            order += "execute"
+            TestResult("ok")
+        }
+
+        assertThat(result).isEqualTo(TestResult("ok"))
+        assertThat(order).containsExactly("authz", "hook", "execute", "audit")
+    }
+
+    @Test
+    fun `txHook does NOT run on denial path (transaction was never opened)`() {
+        val hookCalls = mutableListOf<WriteContext>()
+        val auditor = RecordingAuditor<TestCommand, TestResult>()
+        val policy = AuthzPolicy<TestCommand> { _, _ ->
+            throw WriteAuthorizationException(WriteDenialReason.NOT_A_MEMBER)
+        }
+        val hook = WriteTxHook { ctx -> hookCalls += ctx }
+
+        val gate = WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = NoopTxManager(),
+            validator = null,
+            txHook = hook,
+        )
+
+        assertThatThrownBy {
+            gate.apply(TestCommand("x"), context) { TestResult("never") }
+        }.isInstanceOf(WriteAuthorizationException::class.java)
+
+        assertThat(hookCalls).isEmpty()
+    }
+
+    @Test
     fun `validator-less gate skips validation step and still enforces order`() {
         val order = mutableListOf<String>()
         val policy = AuthzPolicy<TestCommand> { _, _ -> order += "authz" }

@@ -173,6 +173,41 @@ correctness precedes deployment readiness:
 This is a Tier 3 change to `02-roadmap.md` per ADR-005 §2.3
 ("phase order"). It lands in the same commit as this ADR.
 
+### 2.10 WriteGate is the exclusive mutation entry point
+
+**Added post-3J.1 pressure test.** Every state-changing operation
+on a Medcore domain entity MUST flow through `WriteGate.apply()`.
+Direct repository mutations (`repository.save(...)`,
+`repository.delete(...)`, `@Modifying` JPQL) outside a
+`WriteGate.apply` invocation are forbidden for domain entities.
+Exemptions: audit writes (`JdbcAuditWriter.write` — the audit row
+IS the governed artifact), chain-verification bookkeeping, and
+Flyway migrations (owned by `medcore_migrator`, not the app).
+
+Review-gated until Phase 3I, where an ArchUnit rule lands in CI.
+Until then, the discipline is enforced by review: any PR
+introducing a domain-entity `.save(...)` outside a handler-under-
+WriteGate is rejected.
+
+### 2.11 `WriteTxHook` — caller-dependent tx-local state
+
+**Added in 3J.2** after discovery that V8's RLS policies read
+`app.current_user_id`, a `SET LOCAL`-scoped GUC that evaporates
+when the policy check's own read-only transaction commits.
+`WriteGate` exposes an optional `WriteTxHook` seam invoked AFTER
+`transact-open` and BEFORE the handler's `apply`. Phase 3J.2 wires
+`TenancyRlsTxHook`, which calls `TenancySessionContext.apply(
+userId = context.principal.userId, tenantId = null)` to re-set the
+GUC inside the gate's transaction.
+
+Without the hook, every write to an RLS-protected table reads zero
+rows in the handler (RLS filters everything). This was discovered
+during 3J.2 integration testing — the first end-to-end success
+path returned 404 rather than 200. The fix is in the platform
+layer so every future mutation inherits the correct behaviour;
+future PHI writes (Phase 4A+) will wire a companion
+`PhiRlsTxHook` that additionally sets `app.current_tenant_id`.
+
 ## 3. Alternatives Considered
 
 ### 3.1 Spring AOP with `@Authorized` annotation

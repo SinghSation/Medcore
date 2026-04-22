@@ -47,6 +47,15 @@ class WriteGate<CMD, R>(
     private val auditor: WriteAuditor<CMD, R>,
     private val txManager: PlatformTransactionManager,
     private val validator: WriteValidator<CMD>? = null,
+    /**
+     * Optional [WriteTxHook] invoked once per `apply()` immediately
+     * after the gate's transaction opens, before the caller's
+     * `execute` lambda runs. Phase 3J.2 wires `TenancyRlsTxHook`
+     * here so `app.current_user_id` is set inside the gate's
+     * transaction — without the hook, V8 RLS filters the handler's
+     * reads to zero rows. Unit tests pass `null` to skip.
+     */
+    private val txHook: WriteTxHook? = null,
 ) {
 
     private val log = LoggerFactory.getLogger(WriteGate::class.java)
@@ -89,6 +98,11 @@ class WriteGate<CMD, R>(
         // audit-success. If either throws, the template rolls the
         // transaction back atomically.
         return txTemplate.execute {
+            // Step 3a — Prepare tx-local state (e.g., RLS GUCs) so
+            // the handler's DB reads/writes are scoped to the caller.
+            // Runs INSIDE the gate's transaction; state survives the
+            // handler but expires at commit.
+            txHook?.beforeExecute(context)
             val result = execute(command)
             auditor.onSuccess(command, result, context)
             result

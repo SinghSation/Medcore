@@ -1,6 +1,7 @@
 package com.medcore.platform.security
 
 import com.medcore.TestcontainersConfiguration
+import com.medcore.platform.write.WriteDenialReason
 import java.util.UUID
 import javax.sql.DataSource
 import org.assertj.core.api.Assertions.assertThat
@@ -16,7 +17,11 @@ import org.springframework.transaction.support.TransactionTemplate
 
 /**
  * Integration coverage for [AuthorityResolver] across the role /
- * status matrix (Phase 3J, ADR-007 §4.9).
+ * status matrix (Phase 3J, ADR-007 §4.9). Phase 3J.2 replaced the
+ * `Set<MedcoreAuthority>` return with a sealed [AuthorityResolution];
+ * every test now asserts the specific `Granted(authorities)` or
+ * `Denied(reason)` variant so the downstream audit row gets the
+ * correct denial code.
  */
 @SpringBootTest
 @Import(TestcontainersConfiguration::class)
@@ -88,52 +93,68 @@ class AuthorityResolverIntegrationTest {
     }
 
     @Test
-    fun `active OWNER gets full tenancy authority set`() {
+    fun `active OWNER is Granted the full tenancy authority set`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(ownerId, "active-alpha") }!!
-        assertThat(authorities).isEqualTo(MembershipRoleAuthorities.OWNER_AUTHORITIES)
+        val resolution = tx.execute { resolver.resolveFor(ownerId, "active-alpha") }!!
+        assertThat(resolution).isInstanceOf(AuthorityResolution.Granted::class.java)
+        val granted = resolution as AuthorityResolution.Granted
+        assertThat(granted.authorities).isEqualTo(MembershipRoleAuthorities.OWNER_AUTHORITIES)
     }
 
     @Test
-    fun `active ADMIN gets admin authority set (no TENANT_DELETE)`() {
+    fun `active ADMIN is Granted the admin authority set (no TENANT_DELETE)`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(adminId, "active-alpha") }!!
-        assertThat(authorities).isEqualTo(MembershipRoleAuthorities.ADMIN_AUTHORITIES)
-        assertThat(authorities).doesNotContain(MedcoreAuthority.TENANT_DELETE)
+        val resolution = tx.execute { resolver.resolveFor(adminId, "active-alpha") }!!
+        assertThat(resolution).isInstanceOf(AuthorityResolution.Granted::class.java)
+        val granted = resolution as AuthorityResolution.Granted
+        assertThat(granted.authorities).isEqualTo(MembershipRoleAuthorities.ADMIN_AUTHORITIES)
+        assertThat(granted.authorities).doesNotContain(MedcoreAuthority.TENANT_DELETE)
     }
 
     @Test
-    fun `active MEMBER gets read-only authority set`() {
+    fun `active MEMBER is Granted the read-only authority set`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(memberId, "active-alpha") }!!
-        assertThat(authorities).isEqualTo(MembershipRoleAuthorities.MEMBER_AUTHORITIES)
+        val resolution = tx.execute { resolver.resolveFor(memberId, "active-alpha") }!!
+        assertThat(resolution).isInstanceOf(AuthorityResolution.Granted::class.java)
+        val granted = resolution as AuthorityResolution.Granted
+        assertThat(granted.authorities).isEqualTo(MembershipRoleAuthorities.MEMBER_AUTHORITIES)
     }
 
     @Test
-    fun `suspended membership returns empty authority set`() {
+    fun `suspended membership collapses to NOT_A_MEMBER (RLS read-side limitation)`() {
+        // V8's read-side RLS on tenancy.tenant requires the caller to
+        // hold an ACTIVE membership for the tenant row to be visible.
+        // A SUSPENDED member cannot see the tenant row, so
+        // `TenantMembershipLookup.resolve` returns null and the
+        // resolver reports NOT_A_MEMBER. The MEMBERSHIP_SUSPENDED
+        // branch of the sealed result is unreachable until a future
+        // migration lands a SECURITY DEFINER `tenancy.resolve_authority`
+        // function (carry-forward from 3J.2). See AuthorityResolver
+        // KDoc "Known limitation: MEMBERSHIP_SUSPENDED collapses to
+        // NOT_A_MEMBER."
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(suspendedMemberId, "active-alpha") }!!
-        assertThat(authorities).isEmpty()
+        val resolution = tx.execute { resolver.resolveFor(suspendedMemberId, "active-alpha") }!!
+        assertThat(resolution).isEqualTo(AuthorityResolution.Denied(WriteDenialReason.NOT_A_MEMBER))
     }
 
     @Test
-    fun `active OWNER of suspended tenant returns empty authority set`() {
+    fun `active OWNER of suspended tenant returns Denied with TENANT_SUSPENDED`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(suspendedTenantOwnerId, "suspended-beta") }!!
-        assertThat(authorities).isEmpty()
+        val resolution = tx.execute { resolver.resolveFor(suspendedTenantOwnerId, "suspended-beta") }!!
+        assertThat(resolution).isEqualTo(AuthorityResolution.Denied(WriteDenialReason.TENANT_SUSPENDED))
     }
 
     @Test
-    fun `non-member returns empty authority set`() {
+    fun `non-member returns Denied with NOT_A_MEMBER`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(strangerId, "active-alpha") }!!
-        assertThat(authorities).isEmpty()
+        val resolution = tx.execute { resolver.resolveFor(strangerId, "active-alpha") }!!
+        assertThat(resolution).isEqualTo(AuthorityResolution.Denied(WriteDenialReason.NOT_A_MEMBER))
     }
 
     @Test
-    fun `unknown tenant slug returns empty authority set`() {
+    fun `unknown tenant slug returns Denied with NOT_A_MEMBER (enumeration protection)`() {
         val tx = TransactionTemplate(txManager)
-        val authorities = tx.execute { resolver.resolveFor(ownerId, "no-such-tenant") }!!
-        assertThat(authorities).isEmpty()
+        val resolution = tx.execute { resolver.resolveFor(ownerId, "no-such-tenant") }!!
+        assertThat(resolution).isEqualTo(AuthorityResolution.Denied(WriteDenialReason.NOT_A_MEMBER))
     }
 }

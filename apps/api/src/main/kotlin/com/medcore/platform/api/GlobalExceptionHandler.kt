@@ -1,5 +1,6 @@
 package com.medcore.platform.api
 
+import com.medcore.platform.write.WriteValidationException
 import com.medcore.tenancy.context.TenantContextMissingException
 import jakarta.persistence.EntityNotFoundException
 import jakarta.validation.ConstraintViolationException
@@ -175,6 +176,31 @@ class GlobalExceptionHandler {
             ),
         )
     }
+
+    /**
+     * Phase 3J.2: [WriteValidationException] maps to the same 422
+     * envelope and the same `details.validationErrors` shape as
+     * bean-validation failures. Validators run BEFORE a transaction
+     * opens (see `WriteGate`), so there is nothing to roll back —
+     * the caller receives a uniform 422 regardless of whether
+     * Spring's `@Valid` rejected the payload or the domain validator
+     * did. Field + code only; no message, no cause, no value leak.
+     */
+    @ExceptionHandler(WriteValidationException::class)
+    fun onWriteValidation(
+        ex: WriteValidationException,
+    ): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(
+            ErrorResponses.of(
+                code = ErrorCodes.REQUEST_VALIDATION_FAILED,
+                message = "One or more fields failed validation.",
+                details = mapOf(
+                    "validationErrors" to listOf(
+                        mapOf("field" to ex.field, "code" to ex.code),
+                    ),
+                ),
+            ),
+        )
 
     @ExceptionHandler(ConstraintViolationException::class)
     fun onConstraintViolation(

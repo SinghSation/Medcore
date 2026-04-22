@@ -699,7 +699,142 @@ closes when all declared endpoint slices have landed AND every
       surface (carried from 3F.4 per 3F.4 non-goals and the
       carry-forward ledger).
 
-#### 3.4.2 Phase 3J.2+ — Endpoint slices
+#### 3.4.2 Phase 3J.2 — First concrete endpoint through WriteGate
+
+The first concrete mutation command through the 3J.1 framework.
+`PATCH /api/v1/tenants/{slug}` updates `displayName` only —
+status, slug, and deletion remain out of scope for subsequent
+slices.
+
+- [ ] `PATCH /api/v1/tenants/{slug}` implemented on
+      `TenantsController`; body `{displayName: String}`; success
+      returns `200 OK` with `WriteResponse<TenantSummaryResponse>`.
+- [ ] Command / policy / validator / handler / auditor / config
+      stack in `com.medcore.tenancy.write`:
+      `UpdateTenantDisplayNameCommand`, `Validator`, `Policy`,
+      `Handler`, `Auditor`, `TenantWriteConfig`, `TenantSnapshot`.
+      **Every future tenancy write follows this exact layout.**
+- [ ] `UpdateTenantRequest` DTO in `com.medcore.tenancy.api`;
+      `displayName: String?` + `@NotBlank` + `@Size(max = 200)`.
+      Nullable type deliberate — missing field trips `@NotBlank`
+      → 422, not the Phase 3G-deferred 400 path.
+- [ ] `TenantSummaryResponse.from(snapshot)` factory added;
+      write-path + read-path return identical outbound wire shape.
+- [ ] Controller trims `displayName` before command construction;
+      validator enforces post-trim emptiness + ISO-control-
+      character rejection + length ≤ 200 + slug format
+      (`^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$`).
+- [ ] Policy requires `MedcoreAuthority.TENANT_UPDATE` (OWNER +
+      ADMIN; MEMBER denied). Denial reasons forwarded from the
+      new sealed `AuthorityResolution.Denied(reason)` so the
+      `AUTHZ_WRITE_DENIED` audit row carries the specific
+      `denial:<code>` slug, not the coarse "empty set."
+- [ ] **`AuthorityResolver` refactored to return sealed
+      `AuthorityResolution.Granted(authorities) | Denied(reason)`**
+      in place of `Set<MedcoreAuthority>`. Phase 3J.1 tests
+      rewritten to assert the Denied variant by reason. Known
+      limitation: `MEMBERSHIP_SUSPENDED` collapses to
+      `NOT_A_MEMBER` due to V8 RLS on `tenancy.tenant` hiding
+      the tenant row from suspended members. Documented in the
+      resolver KDoc and ADR-007 §7.1; carry-forward to a future
+      V13+ SECURITY DEFINER resolution function.
+- [ ] **`WriteTxHook` seam added to `WriteGate`** with
+      `TenancyRlsTxHook` wired as the default for tenancy writes.
+      Sets `app.current_user_id` GUC inside the gate's tx so
+      RLS-protected handler reads succeed. Without this,
+      `@Valid`-and-policy-passed writes returned 404 because RLS
+      filtered the handler's `findBySlug` to zero rows (the GUC
+      was set only in the policy's short-lived read tx).
+- [ ] **`WriteValidationException(field, code)`** added in
+      `platform/write/` + one `@ExceptionHandler` on
+      `GlobalExceptionHandler` mapping to 422 with the
+      `details.validationErrors = [{field, code}]` shape the
+      bean-validation path already uses.
+- [ ] **`AuditAction.TENANCY_TENANT_UPDATED`** registry entry
+      (`tenancy.tenant.updated`). Registry discipline applied —
+      test emission, KDoc, runbook mention (in the next runbook
+      revision slice; not blocking 3J.2).
+- [ ] **Handler no-op optimisation:** if
+      `entity.displayName == command.displayName`, return snapshot
+      with `changed = false` and skip `.save()`. Auditor
+      suppresses emission when `changed = false`. Preserves
+      "every persisted change emits an audit row" (a no-op
+      persists no change).
+- [ ] Audit success row: `action=tenancy.tenant.updated`,
+      `reason=intent:tenant.update_display_name`,
+      `resource_type=tenant`, `resource_id=<slug>`,
+      `tenant_id=<uuid>`, `outcome=SUCCESS`. No before/after
+      state — audit payload slice deferred to Phase 7 compliance
+      requirement (tracked as ADR-007 §7.1 carry-forward).
+- [ ] Audit denial row: `action=authz.write.denied`,
+      `reason=intent:tenant.update_display_name|denial:<code>`,
+      `resource_type=tenant`, `resource_id=<slug>`,
+      `tenant_id=null`, `outcome=DENIED`. Slug captured even on
+      unknown-tenant path for enumeration-attempt forensics.
+- [ ] Unknown slug returns 403 (NOT 404) — hides tenant
+      existence from non-members; enumeration protection.
+- [ ] No `If-Match` header requirement (3J.2 accepts
+      last-writer-wins). JPA `@Version` bumps on flush;
+      concurrent writes produce 409 via
+      `OptimisticLockingFailureException` → 3G envelope.
+      `If-Match` carry-forward to a future slice when a client
+      demands it.
+- [ ] `Idempotency-Key` header accepted but shape-only (3J.1
+      `WriteContext.idempotencyKey`). Not read, not deduped, not
+      logged. Dedupe semantics carry-forward to Phase 4A.
+- [ ] Response body `requestId` equals response header
+      `X-Request-Id` — asserted in integration test.
+- [ ] **ADR-007 addendum §2.10** — "WriteGate is the exclusive
+      mutation entry point." Review-gated until Phase 3I's
+      ArchUnit enforcement.
+- [ ] **ADR-007 addendum §2.11** — "`WriteTxHook` — caller-
+      dependent tx-local state." Framework-level seam documented.
+- [ ] `docs/security/phi-exposure-review-3j-2.md` landed.
+      Risk: None (tenant metadata; no clinical path).
+- [ ] Tests:
+  - `UpdateTenantDisplayNameValidatorTest` (6): happy path;
+    blank; whitespace-only; overlong (201); control-char;
+    malformed slug.
+  - `UpdateTenantDisplayNameIntegrationTest` (15): 401 unauth;
+    OWNER 200 + audit; ADMIN 200; MEMBER 403 +
+    denial=insufficient_authority; non-member 403 +
+    denial=not_a_member; suspended membership 403 +
+    denial=not_a_member (RLS-collapsed); tenant-suspended 403 +
+    denial=tenant_suspended; unknown-slug 403 +
+    denial=not_a_member; empty 422; whitespace-only 422;
+    overlong 422; missing-field 422; no-op 200 NO audit row
+    row_version unchanged; second identical PATCH one audit row;
+    requestId parity; Idempotency-Key passthrough.
+  - `WriteGateTest` (+2): txHook runs inside tx after authz
+    before execute; txHook does NOT run on denial path.
+  - `AuthorityResolverIntegrationTest` (7) rewritten: assert
+    specific `Granted(authorities)` or `Denied(reason)` for each
+    case; MEMBERSHIP_SUSPENDED case asserts the RLS-collapse into
+    NOT_A_MEMBER with a comment pointing at the remediation path.
+- [ ] Existing 218 tests still green; total after 3J.2: **242/242
+      across 49 suites (+24).**
+- [ ] Carry-forward closed in 3J.2:
+  - `WriteResponse` envelope stability for first consumer
+    (still `data + requestId` only; typed-extensions deferred
+    until first caller needs them — ADR-007 §7.1).
+  - First concrete tenancy write endpoint (tracked from 3J.1).
+- [ ] Carry-forward opened from 3J.2:
+  - `MEMBERSHIP_ROLE_UPDATE` authority (first role-change
+    endpoint, 3J.3+).
+  - V13+ SECURITY DEFINER `tenancy.resolve_authority(slug, uid)`
+    function to close the RLS-induced `MEMBERSHIP_SUSPENDED`
+    collapse.
+  - Audit payload column / structured diff for mutation
+    before/after reconstruction — future ADR, driven by
+    compliance need (realistic trigger Phase 7).
+  - `If-Match` precondition header on PATCH — when a UI or
+    integration client demands it.
+  - ArchUnit rule enforcing "WriteGate is exclusive mutation
+    entry point" — Phase 3I.
+  - `PhiRlsTxHook` sibling that additionally sets
+    `app.current_tenant_id` — Phase 4A.
+
+#### 3.4.3 Phase 3J.3+ — Remaining tenancy writes
 
 <!-- TODO(content): populated as each endpoint slice opens. Each
      slice's DoD row MUST assert: WriteGate is the only mutation
@@ -733,7 +868,7 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.1 DoD populated alongside its
-substrate slice; Phase 3J / 3I reorder reflected in §3.4 + §3.5
-per ADR-007). Next review: 2026-05-22, or on the next phase
-opening (whichever is sooner).*
+*Last reviewed: 2026-04-22 (Phase 3J.2 DoD populated alongside the
+first endpoint slice; §3.4.2 expanded with the full 3J.2 exit bar).
+Next review: 2026-05-22, or on the next phase opening (whichever
+is sooner).*

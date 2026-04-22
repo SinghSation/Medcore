@@ -63,6 +63,22 @@ enum class AuditAction(val code: String) {
      * carry-forward "audit emission on 403 access-denied."
      */
     AUTHZ_WRITE_DENIED("authz.write.denied"),
+
+    // --- Phase 3J.2: tenancy write success ---
+    /**
+     * Emitted by a [com.medcore.platform.write.WriteAuditor] on the
+     * success path of any `tenancy.tenant` mutation. Phase 3J.2
+     * ships the first consumer: display-name updates via
+     * `PATCH /api/v1/tenants/{slug}`. `reason` carries the
+     * per-command intent slug (e.g., `intent:tenant.update_display_name`)
+     * so sibling mutations that share this coarse action can be
+     * distinguished without a schema change (ADR-007 §2.4).
+     * Suppressed for no-op writes — the handler returns
+     * `TenantSnapshot.changed = false`, the auditor skips emission,
+     * "every persisted change emits an audit row" holds because
+     * no-ops persist nothing.
+     */
+    TENANCY_TENANT_UPDATED("tenancy.tenant.updated"),
 }
 
 /**

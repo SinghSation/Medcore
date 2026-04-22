@@ -957,10 +957,15 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | `WriteResponse` envelope extensibility (typed fields only, no `Any`-map) | 3J.1 | **3J.N or 4A** (first caller that needs metadata) |
 | `AuthorityResolver` caching strategy ADR | 3J.1 | **4A+** (when traffic shape warrants) |
 | `WriteContext.idempotencyKey` dedupe persistence + replay semantics | 3J.1 | **4A** (patient-create) / **6A** (Stripe webhooks) |
+| V13+ SECURITY DEFINER `tenancy.resolve_authority(slug, uid)` to close RLS-collapsed `MEMBERSHIP_SUSPENDED` | 3J.2 | **3J.N** (next natural schema slice) |
+| Audit payload column / structured mutation diff (before/after) | 3J.2 | **Phase 7** (compliance-driven ADR) |
+| `If-Match` precondition header on PATCH | 3J.2 | **3J.N or 3L** (when a client demands it) |
+| ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I** (CI substrate lands) |
+| `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A** (first PHI write) |
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J / 3I reorder per ADR-007 —
-mutation correctness precedes deployment readiness). Next review:
-2026-07-22 (quarterly). Review cadence aligned with competitive-
-landscape review cadence.*
+*Last reviewed: 2026-04-22 (Phase 3J.2 first-endpoint slice;
+five new 3J.2-opened carry-forward rows added). Next review:
+2026-07-22 (quarterly). Review cadence aligned with
+competitive-landscape review cadence.*
