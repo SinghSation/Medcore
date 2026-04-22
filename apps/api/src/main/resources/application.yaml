@@ -30,13 +30,24 @@ spring:
         jdbc:
           time_zone: UTC
 
-  # Migrator datasource — owns DDL. In local dev / tests the migrator
-  # is the container superuser; in production it is the dedicated
-  # `medcore_migrator` role provisioned by ops. The `placeholders.app_password`
-  # entry feeds V10's role-password ALTER from the same env var the
-  # application uses to connect.
+  # Migrator datasource (Phase 3H).
+  #
+  # `spring.flyway.enabled` defaults to `true` for dev + test
+  # ergonomics. Production deployments set
+  # `MEDCORE_APP_RUN_MIGRATIONS=false` so Flyway does NOT run in the
+  # application process; migrations are applied ahead of app start
+  # by the Flyway CLI container (`docker/flyway-migrator/Dockerfile`)
+  # consuming the same `apps/api/flyway.conf`. See ADR-006 and
+  # `docs/runbooks/secrets-and-migrations.md`.
+  #
+  # Migrator user defaults to `medcore_migrator` (provisioned by V11
+  # with least-privilege grants — NOBYPASSRLS, no application-data
+  # reads, USAGE + CREATE on the four schemas + full control over
+  # flyway_schema_history). In local dev the container superuser
+  # remains a valid override via `MEDCORE_DB_MIGRATOR_USER=${POSTGRES_USER}`
+  # until V11 has run at least once.
   flyway:
-    enabled: true
+    enabled: ${MEDCORE_APP_RUN_MIGRATIONS:true}
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:medcore_dev}
     user: ${MEDCORE_DB_MIGRATOR_USER:${POSTGRES_USER:medcore}}
     password: ${MEDCORE_DB_MIGRATOR_PASSWORD:${POSTGRES_PASSWORD:}}
@@ -44,6 +55,7 @@ spring:
       - classpath:db/migration/identity
       - classpath:db/migration/tenancy
       - classpath:db/migration/audit
+      - classpath:db/migration/flyway
     schemas:
       - flyway
       - identity

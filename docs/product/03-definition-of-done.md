@@ -463,21 +463,107 @@ carry-forward item remains open.
 - [ ] Carry-forward closed: uniform 401 envelope (from 3B.1);
       `TenantContextMissingException` HTTP mapping (from 3B.1).
 
-### 3.3 Phases 3H, 3I, 3J, 3K, 3L, 3M, 3F.2, 3F.4
+### 3.3 Phase 3H — Secrets + production posture
+
+- [ ] Out-of-process Flyway for production deployments:
+  - Gradle Flyway plugin (`org.flywaydb.flyway` 10.20.1) wired
+    in `apps/api/build.gradle.kts` for dev / CI.
+  - `docker/flyway-migrator/Dockerfile` builds on
+    `flyway/flyway:10.20.1` for production.
+  - Shared `apps/api/flyway.conf` is the single source of truth;
+    both paths consume it; no secrets in the file.
+  - `spring.flyway.enabled` defaults true (dev/test); prod sets
+    `MEDCORE_APP_RUN_MIGRATIONS=false`.
+- [ ] `SecretSource` abstraction (3 implementations):
+  `EnvVarSecretSource` (via Spring Environment — relaxed binding
+  handles env vars + system props), `StaticSecretSource` (test-
+  only), `AwsSecretsManagerSecretSource` (stub throwing with
+  `TODO(3I)`).
+- [ ] Fail-fast contract: `SecretSource.get()` throws
+  `IllegalStateException` with a diagnostic naming the key AND the
+  source on missing/blank values. Tested.
+- [ ] `SecretValidator` `@PostConstruct` probes every
+  `REQUIRED_SECRETS` entry through `SecretSource.get()`. Missing
+  any secret aborts context refresh BEFORE
+  `ApplicationStartedEvent` — readiness stays DOWN.
+- [ ] `FlywayMigrationStateCheck` active when
+  `spring.flyway.enabled=false` (prod). Queries
+  `flyway.flyway_schema_history.installed_rank` and aborts boot
+  when below `MIN_EXPECTED_INSTALLED_RANK` (compile-time constant
+  at 11 after V11).
+- [ ] `JpaDependsOnFlywayCheck` wires EntityManagerFactory to
+  depend on the check — Hibernate's `ddl-auto=validate` cannot
+  race ahead of stale-schema detection.
+- [ ] `V11__medcore_migrator_role.sql`:
+  - Creates `medcore_migrator` role idempotently with LOGIN
+    NOINHERIT **NOBYPASSRLS** NOCREATEDB NOCREATEROLE NOSUPERUSER
+    NOREPLICATION.
+  - GRANTs USAGE + CREATE on `flyway`, `identity`, `tenancy`,
+    `audit` schemas.
+  - GRANTs ALL on `flyway` schema tables (owns `flyway_schema_history`).
+  - REVOKEs ALL ON ALL TABLES IN SCHEMA identity/tenancy/audit —
+    migrator does DDL, not data reads.
+  - GRANTs medcore_app USAGE on flyway schema + SELECT on
+    flyway_schema_history (for FlywayMigrationStateCheck).
+  - Password NOT set — ops concern.
+  - `MigratorRoleIntegrationTest` asserts all of the above at
+    runtime.
+- [ ] `MedcoreAppPasswordSync` (from 3E) marked `@Deprecated`.
+  VERIFY path removed (SecretValidator handles it). SYNC path
+  retained for local-dev ergonomics ONLY, gated by:
+  - `medcore.db.app.passwordSyncEnabled=true` (existing opt-in), AND
+  - production-issuer guard: OIDC issuer must contain
+    `localhost`, `127.0.0.1`, `[::1]`, or `mock-oauth2-server`.
+  Refuses with an ADR-006-citing error otherwise.
+- [ ] `JpaDependsOnPasswordCheck` gated by
+  `spring.flyway.enabled=true` (via `@ConditionalOnProperty`)
+  so production deployments (Flyway disabled) don't fail bean
+  resolution on the missing `medcoreAppPasswordSync` bean.
+- [ ] ADR-006 lands with the four decisions locked: out-of-
+  process Flyway, SecretSource, medcore_migrator least privilege,
+  migration-before-app invariant.
+- [ ] `docs/runbooks/secrets-and-migrations.md` is a complete
+  operator runbook:
+  - Secrets inventory table.
+  - Deployment sequence (Kubernetes initContainer + ECS pre-deploy
+    task examples).
+  - Flyway migrator container build + run instructions.
+  - Password rotation procedure for `medcore_app` AND
+    `medcore_migrator` with a standardised evidence template.
+  - Failure playbook for `REFUSING TO START: expected Flyway
+    state...`.
+  - Failure playbook for `REFUSING TO START: required secret(s)
+    missing...`.
+  - AWS Secrets Manager (Phase 3I) forward-look section.
+- [ ] `docs/security/phi-exposure-review-3h.md` landed.
+  Risk: None.
+- [ ] `MedcoreApiApplicationTests.flyway history records expected
+  migrations in order` updated for V11.
+- [ ] Tests:
+  - `SecretSourceTest` (9): EnvVar get/getOrNull missing/blank/present;
+    Static get/throw; AWS stub always throws; AWS not `@Component`.
+  - `SecretValidatorTest` (4): validate passes / fails / names
+    key / runbook pointer.
+  - `MedcoreAppPasswordSyncTest` (5): sync disabled no-op; issuer
+    guard refuses non-local; local issuer passes; mock issuer
+    passes; blank issuer passes.
+  - `MigratorRoleIntegrationTest` (7): CAN create; CANNOT
+    select identity/tenancy/audit; NOBYPASSRLS; NOSUPERUSER; CAN
+    read flyway_schema_history.
+- [ ] Existing 168 tests still green; total after 3H: 191/191
+  across 42 suites (+23).
+- [ ] Three 3E carry-forwards close: Flyway out-of-process (3E→3H);
+  password rotation flow (3E→3H); medcore_migrator distinct role
+  (3E→3H).
+- [ ] One carry-forward opens to 3I: real AWS Secrets Manager
+  implementation + MedcoreAppPasswordSync deletion.
+
+### 3.4 Phases 3I, 3J, 3K, 3L, 3M
 
 <!-- TODO(content): per-phase checklists populated as each phase opens
-     per ADR-005 §2.4 (living-per-slice cadence). Structure template:
+     per ADR-005 §2.4 (living-per-slice cadence). -->
 
-     #### 3.X Phase NNN
-     - [ ] Exit criterion summary
-     - [ ] Specific test coverage
-     - [ ] Specific audit events present
-     - [ ] Specific artifacts (runbooks, ADRs, etc.) landed
-     - [ ] Workflow benchmarks met (where applicable — Phase 4+ only)
-     - [ ] Carry-forward resolved
--->
-
-### 3.4 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.5 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
