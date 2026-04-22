@@ -1,0 +1,315 @@
+---
+description: Product-docs maintenance rule. Governs docs/product/** lifecycle, tier classification, Roadmap-Phase trailer, and living-doc review cadence. Sibling to ADR-005.
+globs:
+  - "docs/product/**"
+  - "docs/adr/**"
+  - "AGENTS.md"
+  - ".cursor/rules/**"
+  - "apps/**"
+  - "packages/**"
+  - "infra/**"
+  - "Makefile"
+  - "*.gradle.kts"
+  - "*.yaml"
+  - "*.yml"
+alwaysApply: true
+---
+
+# Rule 08 — Product-Docs Maintenance (alwaysApply)
+
+This rule is the operational companion to [ADR-005](../../docs/adr/005-product-direction-framework.md).
+ADR-005 is authoritative for intent; this rule is authoritative for
+enforcement behavior. In any conflict, ADR-005 wins.
+
+## Precedence
+
+This rule operates under `.cursor/rules/00-global-architecture.mdc`
+§Precedence. It does not override AGENTS.md, the architecture
+charter, or ADR-005; it enforces them.
+
+---
+
+## 1. Closed set of product docs
+
+`docs/product/` contains exactly these files:
+
+- `00-vision.md` — mission, niches, locked strategic decisions, claim ledger
+- `01-competitive-landscape.md` — per-niche competitor map
+- `02-roadmap.md` — phase definitions, entry/exit criteria, non-goals
+- `03-definition-of-done.md` — per-phase exit bar, workflow benchmarks
+- `04-compliance-and-legal.md` — compliance maturity, regulatory scope
+- `05-interop-and-reference-data.md` — FHIR/US Core/SMART surface, licensing
+- `06-ux-and-workflow.md` — workflow principles, design-system, accessibility
+
+Adding a seventh file is **prohibited** without a superseding ADR. If
+an agent believes new product content belongs somewhere other than one
+of these six, it MUST halt and request human direction rather than
+create a new file.
+
+---
+
+## 2. Frontmatter requirement
+
+Every file in `docs/product/` MUST carry, at the top of the file,
+frontmatter of this exact shape:
+
+```yaml
+---
+status: Draft | Active | Under Review | Superseded
+last_reviewed: YYYY-MM-DD
+next_review: YYYY-MM-DD
+cadence: stable-yearly | quarterly | living-per-slice | event-driven
+owner: <name>
+---
+```
+
+An agent editing a `docs/product/` file MUST update `last_reviewed`
+when content changes meaningfully, and MUST update `next_review` to
+a date consistent with the file's cadence.
+
+---
+
+## 3. Tier classification for docs/product/
+
+`docs/product/**` is **Tier 2 by default**.
+
+A change **escalates to Tier 3** if and only if its diff materially
+alters ANY of the following content categories:
+
+| Category | File & section |
+| ---- | ---- |
+| Roadmap phase definitions (entry, exit, order, non-goals, set of phases) | `02-roadmap.md` — phase rows |
+| Claim ledger | `00-vision.md` — `## Claim Ledger` section |
+| Compliance posture statements moving between "claimed" and "not claimed" | `04-compliance-and-legal.md` — §Claim Ledger Reconciliation |
+| Compliance maturity phase boundaries (A/B/C/D) | `04-compliance-and-legal.md` — §Maturity Phases |
+| Regulatory scope declarations (HIPAA, state privacy, SaMD boundary, ONC track) | `04-compliance-and-legal.md` |
+| Definition-of-Done thresholds (workflow benchmarks, gate conditions) | `03-definition-of-done.md` |
+| Reference-data licensing stance (e.g., deciding to license CPT) | `05-interop-and-reference-data.md` — §Reference Data |
+
+Non-escalating edits (Tier 2) include: typo fixes; clarifying prose;
+cadence-driven review refreshes that re-affirm existing content;
+adding a competitor row to `01-competitive-landscape.md`; updating
+`last_reviewed` / `next_review` frontmatter; renaming a section
+header without changing content; restructuring paragraphs without
+changing positions declared above.
+
+**Classification tie-breaker (inherited from ADR-004 §2.1):** when
+a change's tier is ambiguous, Tier 3. Agents MUST NOT classify down
+in the face of doubt.
+
+**Mixed-slice rule:** if a slice includes any non-`docs/product/`
+change that is itself Tier 2 or Tier 3, the highest-tier-touched
+rule from ADR-004 applies.
+
+---
+
+## 4. Roadmap-Phase trailer (universal precondition)
+
+Every code-bearing commit (i.e., any commit that touches files
+outside `docs/project-timeline.md`) MUST include, in its body,
+exactly one `Roadmap-Phase:` trailer of the form:
+
+```
+Roadmap-Phase: <phase> (<short description>)
+```
+
+Rules:
+
+- **Exactly one** trailer. Lists, ranges, and multi-phase
+  classifications are prohibited.
+- The `<phase>` value MUST be one of:
+  - A phase identifier present as a row in `docs/product/02-roadmap.md`
+    (e.g., `3F`, `4A`, `5D`).
+  - The literal token `governance` (ADRs, rules, `AGENTS.md`
+    amendments, charter amendments, product-framework docs).
+  - The literal token `docs` (updates to `docs/project-timeline.md`
+    only).
+- For commits under the `governance` token: the commit body MUST
+  cite which ADR, rule, or governance file the slice advances.
+
+**Reserved scope of the `governance` token (ADR-005 §2.5).** The
+`governance` token is permitted ONLY for commits whose diff is
+wholly contained within:
+
+- `docs/adr/**`
+- `AGENTS.md`
+- `.cursor/rules/**`
+- `.claude/**`
+- `docs/architecture/**`
+- `docs/product/**`
+
+A commit that also touches feature code, platform code, database
+migrations, infrastructure, or any other non-governance path MUST
+use a roadmap-phase identifier. Using `governance` to label
+feature, platform, or bug-fix work is a governance incident and
+halts the commit under ADR-004 §2.3 guardrail 7.
+
+**Reserved scope of the `docs` token.** The `docs` token is
+permitted ONLY for commits whose diff is wholly contained within
+`docs/project-timeline.md`. Any commit that also touches code,
+migrations, or governance files MUST use a roadmap-phase
+identifier or `governance`, not `docs`.
+
+Commits that predate ADR-005's landing are exempt from this rule.
+No retroactive rewriting is required or permitted.
+
+---
+
+## 5. Living-doc review cadence
+
+Every file in `docs/product/` carries a `next_review:` date. On the
+first slice after a `next_review:` date has passed, the agent MUST
+either:
+
+1. **Refresh the doc** — review its content, update or re-affirm as
+   needed, bump `last_reviewed:` to today, and set `next_review:` to
+   a new date consistent with the cadence. The refresh may be its
+   own slice (typically Tier 2) or may ride alongside a larger slice
+   that already touches the doc.
+
+2. **Defer the review** — add a `Review-Deferred:` line to the
+   commit body naming the specific date the review is deferred to
+   (MUST be within 30 days of the original `next_review:` date) and
+   the reason. Add a carry-forward item to the commit body tracking
+   the deferral. Repeated deferrals on the same doc across more than
+   two slices MUST halt and flag for human input.
+
+---
+
+## 6. Docs-must-not-block-commits
+
+If a code-bearing slice requires a `docs/product/**` update per §3
+but the exact change is unclear, ambiguous, or would demand
+product decisions the agent cannot confidently make, the agent
+MUST:
+
+1. Insert a `TODO(review)` marker in the affected doc section,
+   naming the specific question. Example:
+
+   ```markdown
+   <!-- TODO(review): does phase 4C exit criterion need adjustment
+        given the document-storage deferral? Flagged in commit <sha>. -->
+   ```
+
+2. Cite the marker in the commit body under a `Docs-Review-TODO:`
+   trailer. Example:
+
+   ```
+   Docs-Review-TODO: docs/product/02-roadmap.md §Phase 4C —
+   question about exit criterion adjustment for document-storage
+   deferral. Follow-up slice required.
+   ```
+
+3. Add the marker resolution to carry-forward.
+
+**Required conditions for `TODO(review)` use (ADR-005 §2.4).**
+A `TODO(review)` marker is permitted ONLY when BOTH:
+
+- **(a)** the doc-update change impact is genuinely ambiguous (the
+  agent cannot confidently decide what the doc should say), AND
+- **(b)** the commit body contains a matching `Docs-Review-TODO:`
+  trailer naming the specific file, section, and question.
+
+Inserting a `TODO(review)` marker without the trailer, or using
+the trailer without inserting the marker, is a governance
+incident and halts the commit under ADR-004 §2.3 guardrail 3.
+
+**Hard cap on active markers.** No more than **3 active
+`TODO(review)` markers per `docs/product/**` file** at any time.
+An "active" marker is any unresolved `TODO(review)` comment in
+the file; resolution requires both removing the marker and
+answering the underlying question (content written, or question
+declared moot with a one-line rationale in the slice that removes
+the marker).
+
+A slice that would push any `docs/product/**` file to a 4th active
+marker MUST halt under ADR-004 §2.3 and EITHER:
+
+- Resolve an existing marker in the same slice to stay at or below
+  the cap, OR
+- Re-scope to avoid adding a new marker, OR
+- Flag for human input with a stop-and-flag report naming the
+  outstanding markers and proposing a resolution path.
+
+**Visibility requirement.** Every slice's pre-commit review pack
+that touches a `docs/product/**` file MUST report the
+active-`TODO(review)`-count for that file both before and after
+the slice. This makes the cap visible to the human reviewer at
+approval time.
+
+This escape hatch exists so documentation ambiguity never blocks
+forward code progress. The cap, the required marker/trailer
+pairing, and the visible count are the guardrails that prevent it
+from becoming a silent-decay vector. Repeated use on the same doc
+across more than two slices without resolution MUST halt and flag
+for human input.
+
+---
+
+## 7. Pre-commit checklist (agent self-verification)
+
+Before any commit that touches, OR is logically connected to, a
+`docs/product/` file, the agent MUST verify in the review pack:
+
+- [ ] The slice's tier classification considered the §3 escalation
+      triggers. Any escalation is declared in the commit body.
+- [ ] Every modified `docs/product/` file has its `last_reviewed:`
+      bumped (unless the change is frontmatter-only or pure typo fix).
+- [ ] Every modified `docs/product/` file has a `next_review:`
+      consistent with its cadence.
+- [ ] The `Roadmap-Phase:` trailer is present and matches a roadmap
+      row or is `governance` / `docs`.
+- [ ] If a `docs/product/` update was required by §3 but not made,
+      a `TODO(review)` marker and a `Docs-Review-TODO:` commit-body
+      line are present per §6.
+- [ ] If any `docs/product/` file's `next_review:` has passed, §5 is
+      satisfied (refreshed OR a `Review-Deferred:` line is present).
+- [ ] For every `docs/product/**` file touched by the slice, the
+      active-`TODO(review)`-count is reported before and after the
+      slice, and no file exceeds **3 active markers** post-slice
+      (§6 hard cap).
+- [ ] Every `TODO(review)` marker inserted by the slice has a
+      matching `Docs-Review-TODO:` trailer in the commit body (§6
+      required pairing).
+- [ ] If the commit uses `Roadmap-Phase: governance` or
+      `Roadmap-Phase: docs`, the reserved-scope constraints in §4
+      are satisfied (diff wholly contained within the reserved
+      paths).
+
+Failure to satisfy any item halts the commit per ADR-004 §2.3
+universal guardrails.
+
+---
+
+## 8. Enforcement
+
+- **Agent-level:** this rule is `alwaysApply: true` for the file
+  globs above; Cursor loads it into every session's context. Agents
+  MUST treat violations as stop-and-flag events.
+- **Human-level:** the repository owner validates the §7 checklist
+  in every review pack that touches product docs OR that advances
+  a roadmap phase.
+- **CI-level:** deferred to Phase 3I. At that point a CI check will
+  mechanically enforce §§4, 5, 6, and 7. Until then, agent + human
+  enforcement is the operative control.
+
+---
+
+## 9. Relationship to ADR-004
+
+This rule does not modify ADR-004. It extends ADR-004's tier model
+to the new `docs/product/` directory with a content-based
+classification rule. The universal preconditions and guardrails
+from AGENTS.md §§4.7.3 and 4.7.4 apply to every slice this rule
+governs. Override phrases from AGENTS.md §4.7.2 supersede tier
+autonomy as normal.
+
+---
+
+## 10. Amendment
+
+This rule is amended only by a superseding or amending ADR. Direct
+edits to this file's enforcement semantics without an ADR are
+prohibited. Typo fixes and prose clarifications that do not change
+enforcement behavior are permitted as Tier 3 governance edits per
+AGENTS.md §4.7.1.

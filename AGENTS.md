@@ -44,6 +44,8 @@ medcore/
     interoperability/     # FHIR profiles, HL7 mappings, terminology
     runbooks/             # On-call, incident response, recovery procedures
     evidence/             # Audit artifacts for compliance attestations
+    product/              # Vision, roadmap, DoD, compliance maturity, interop, UX (ADR-005)
+    project-timeline.md   # Append-only historical narrative of landed commits
   apps/
     web/                  # Frontend application (placeholder)
     api/                  # Backend API service (placeholder)
@@ -217,6 +219,11 @@ A slice is Tier 3 if its diff touches ANY of:
 - Interoperability / FHIR contracts (`packages/schemas/fhir/**`).
 - Governance files (`AGENTS.md`, `.cursor/rules/**`, `.claude/**`,
   `docs/adr/**`, `docs/architecture/**`).
+- **`docs/product/**` when the change materially alters roadmap
+  phase definitions, the claim ledger, compliance stance, or
+  Definition-of-Done thresholds** (ADR-005 §2.3, Rule 08 §3). Non-
+  escalating edits (typos, clarifications, review-date bumps,
+  competitor-row additions) remain Tier 2 — see below.
 - Any area the agent is not confident classifying.
 
 Tier 3 requires, in the current session:
@@ -249,9 +256,14 @@ A slice is Tier 2 if it is not Tier 3 AND its diff touches ANY of:
   production-posture guarantees.
 - Developer runbooks touching security-adjacent topics that are not
   themselves governance files.
+- **`docs/product/**` changes that do NOT meet any Tier 3 escalation
+  trigger above** — routine maintenance (typo fixes, clarifying
+  prose, frontmatter date bumps, adding competitor rows, restructuring
+  without changing governance-bearing content per ADR-005 §2.3).
 
 A slice whose diff includes an additive migration AND any Tier 3
-trigger is Tier 3 by the tie-breaker above.
+trigger is Tier 3 by the tie-breaker above. A `docs/product/**`
+change that satisfies any Tier 3 escalation trigger is Tier 3.
 
 Tier 2 permits autonomous commit provided §§4.7.3 and 4.7.4 are
 satisfied. Pushing still requires the exact phrase
@@ -308,6 +320,37 @@ Every commit at every tier requires ALL of the following:
    - Files outside the agreed scope of the task.
 5. The commit body carries a **`Tier: N`** line plus a
    **carry-forward list** enumerating intentionally deferred items.
+6. The commit body carries exactly one **`Roadmap-Phase:`** trailer
+   naming the phase the slice advances, per ADR-005 §2.5 and Rule 08
+   §4. The value MUST match a roadmap row in
+   `docs/product/02-roadmap.md`, OR the literal token `governance`
+   (ADRs, rules, `AGENTS.md` / charter amendments, or product-
+   framework doc changes — diff MUST be wholly contained within
+   `docs/adr/**`, `AGENTS.md`, `.cursor/rules/**`, `.claude/**`,
+   `docs/architecture/**`, or `docs/product/**`), OR the literal
+   token `docs` (diff MUST be wholly contained within
+   `docs/project-timeline.md`). Lists, ranges, and multi-phase
+   values are prohibited. Using `governance` or `docs` to label a
+   slice that advances feature, platform, migration, infrastructure,
+   or test work is a governance incident.
+7. If the slice materially changes `docs/product/` content named in
+   ADR-005 §2.3 (roadmap phase, claim ledger, compliance stance,
+   Definition-of-Done thresholds), the corresponding doc update
+   lands in the SAME commit. When the exact change is ambiguous
+   and documentation would block commit velocity, the agent MUST
+   insert a `TODO(review)` marker per Rule 08 §6 AND cite it via a
+   matching `Docs-Review-TODO:` trailer AND add the resolution to
+   carry-forward. The marker and the trailer MUST appear together —
+   inserting one without the other is a governance incident. No
+   `docs/product/**` file may accumulate more than **3 active
+   `TODO(review)` markers**; the review pack reports the active
+   count per file before and after the slice. Documentation
+   ambiguity MUST NOT block forward progress, but the escape hatch
+   is bounded by the cap.
+8. If any `docs/product/` file's `next_review:` date has passed as
+   of the commit, §5's carry-forward OR an explicit
+   `Review-Deferred:` trailer naming the new review date and the
+   reason is required per Rule 08 §5.
 
 #### 4.7.4 Universal guardrails (all tiers)
 
@@ -347,8 +390,18 @@ phase.
 Commit messages MUST follow **Conventional Commits**
 (`type(scope): subject`), with an imperative subject ≤72 characters
 and no trailing period. The body SHOULD cite the invariant(s) or
-ADR(s) the change relates to. The body MUST include the tier
-classification and carry-forward list per §§4.7.3 and 4.7.5.
+ADR(s) the change relates to. The body MUST include:
+
+- The tier classification (`Tier: 1 | 2 | 3`) per §4.7.3 condition 5.
+- The carry-forward list per §4.7.5.
+- Exactly one `Roadmap-Phase:` trailer per §4.7.3 condition 6 and
+  ADR-005 §2.5. Format: `Roadmap-Phase: <phase> (<short description>)`.
+  Valid `<phase>` values: any row in `docs/product/02-roadmap.md`,
+  `governance`, or `docs`.
+- Where applicable per §4.7.3 conditions 7 and 8: a
+  `Docs-Review-TODO:` trailer citing any `TODO(review)` marker
+  inserted under Rule 08 §6, and/or a `Review-Deferred:` trailer
+  naming the new review date and reason under Rule 08 §5.
 
 #### 4.7.7 Post-commit report
 
@@ -365,6 +418,35 @@ The detailed per-commit procedure lives in
 [`.claude/skills/safe-local-commit.md`](./.claude/skills/safe-local-commit.md).
 Agents MUST follow that skill step-by-step for every commit. Skipping
 any step is a governance incident.
+
+#### 4.7.8 Living-doc maintenance
+
+`docs/product/` contains six living documents governed by
+[ADR-005](./docs/adr/005-product-direction-framework.md) and
+[`.cursor/rules/08-product-docs-maintenance.mdc`](./.cursor/rules/08-product-docs-maintenance.mdc).
+Each file carries a `next_review:` date in its frontmatter.
+
+Agents MUST NOT silently let a `docs/product/` file's `next_review:`
+pass. On the first slice after a passed review date, the agent MUST
+either:
+
+1. **Refresh the doc** — review content, update or re-affirm, bump
+   `last_reviewed:` to today, set a new `next_review:` date consistent
+   with the file's cadence. The refresh may be its own slice (Tier 2)
+   or ride alongside a slice that already touches the doc.
+
+2. **Defer the review** — add a `Review-Deferred:` line to the
+   commit body naming the new review date (within 30 days of the
+   original) and the reason. Add the deferral to carry-forward. No
+   more than two consecutive deferrals are permitted on the same
+   doc before the agent MUST halt and flag for human input.
+
+The **docs-must-not-block-commits** escape applies: if a slice
+requires a `docs/product/` update per ADR-005 §2.3 but the exact
+change is unclear, the agent MUST insert a `TODO(review)` marker
+in the doc and cite it in the commit body via `Docs-Review-TODO:`
+per Rule 08 §6. Ambiguity about documentation MUST NOT block
+forward code progress.
 
 ### 4.8 Remote and Destructive Git Operations
 

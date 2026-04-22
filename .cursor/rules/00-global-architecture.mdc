@@ -66,8 +66,10 @@ If a conflict cannot be reconciled, the assistant MUST halt and ask.
 
 Git authority is governed by `AGENTS.md` §§4.7–4.8 under the Tiered
 Execution Authority Model defined in
-[ADR-004](../../docs/adr/004-tiered-execution-authority-model.md).
-In summary:
+[ADR-004](../../docs/adr/004-tiered-execution-authority-model.md) and
+extended for product-docs maintenance by
+[ADR-005](../../docs/adr/005-product-direction-framework.md) and
+[Rule 08](./08-product-docs-maintenance.mdc). In summary:
 
 - Every slice is classified **Tier 1 (safe)**, **Tier 2 (medium-risk)**,
   or **Tier 3 (high-risk)** before commit, per the lists in
@@ -77,17 +79,23 @@ In summary:
   entire slice. Mixed-tier slices are never classified down.
 - **Tier 3** touches authentication, authorization, audit logging,
   non-additive migrations, `infra/**`, dependency manifests / lockfiles,
-  secrets, PHI paths, FHIR contracts, or governance files
-  (`AGENTS.md`, `.cursor/rules/**`, `.claude/**`, `docs/adr/**`,
-  `docs/architecture/**`). Tier 3 REQUIRES the exact session phrase
+  secrets, PHI paths, FHIR contracts, governance files (`AGENTS.md`,
+  `.cursor/rules/**`, `.claude/**`, `docs/adr/**`,
+  `docs/architecture/**`), or **`docs/product/**` when a change
+  materially alters roadmap phase definitions, the claim ledger,
+  compliance stance, or Definition-of-Done thresholds** (ADR-005 §2.3,
+  Rule 08 §3). Tier 3 REQUIRES the exact session phrase
   **"approved to commit"**, an explicit per-change approval naming the
   high-risk area, and the exact phrase **"approved to push"** before
   any push. All three are **single-use and scoped to the preceding turn**.
 - **Tier 2** touches strictly-additive migrations, new non-FHIR OpenAPI
   contracts, new endpoints / controllers / services outside Tier 3
-  areas, production-posture-affecting test infrastructure, or
-  security-adjacent runbooks. Tier 2 permits autonomous commit;
-  pushing STILL requires **"approved to push"**.
+  areas, production-posture-affecting test infrastructure,
+  security-adjacent runbooks, or **`docs/product/**` changes that do
+  NOT meet any Tier 3 escalation trigger above** (routine maintenance:
+  typo fixes, frontmatter date bumps, adding competitor rows,
+  clarifying prose). Tier 2 permits autonomous commit; pushing STILL
+  requires **"approved to push"**.
 - **Tier 1** touches none of the above and carries no migrations, no
   governance files, no security/audit code, no dependency manifest
   changes, and no FHIR contracts. Tier 1 permits autonomous commit
@@ -98,8 +106,10 @@ In summary:
   classification ambiguity forces a stop-and-flag report instead of a
   commit.
 - Commit messages MUST follow **Conventional Commits**
-  (`type(scope): subject`) and MUST include a `Tier: N` line and a
-  carry-forward list in the body (§4.7.5–§4.7.6).
+  (`type(scope): subject`) and MUST include a `Tier: N` line, a
+  `Roadmap-Phase:` trailer citing a row in
+  `docs/product/02-roadmap.md` (or the tokens `governance` / `docs`),
+  and a carry-forward list in the body (§4.7.5–§4.7.6, ADR-005 §2.5).
 - Override phrases (**"hold"**, **"review only"**, **"draft only"**,
   **"do not commit"**, **"do not push"**) issued by the human in the
   current session force a halt or Tier 3 treatment, overriding tier
