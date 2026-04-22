@@ -2,7 +2,7 @@ package com.medcore.tenancy.context
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.medcore.platform.api.ErrorCodes
-import com.medcore.platform.api.ErrorResponse
+import com.medcore.platform.api.ErrorResponses
 import com.medcore.platform.audit.ActorType
 import com.medcore.platform.audit.AuditAction
 import com.medcore.platform.audit.AuditEventCommand
@@ -153,11 +153,15 @@ class TenantContextFilter(
         response.characterEncoding = Charsets.UTF_8.name()
         objectMapper.writeValue(
             response.outputStream,
-            ErrorResponse(
+            // Phase 3G: message standardised to "Access denied." —
+            // identical to MedcoreAccessDeniedHandler's emission so
+            // "tenant" never leaks into the 403 body. Callers
+            // distinguish filter-denied from authz-denied by `code`,
+            // never by message. requestId lifted from MDC
+            // (Phase 3F.1 substrate) via ErrorResponses.of.
+            ErrorResponses.of(
                 code = ErrorCodes.TENANT_FORBIDDEN,
-                // Uniform message — no enumeration signal (unknown slug
-                // vs. not-a-member vs. suspended all return the same text).
-                message = "Access to the requested tenant is denied.",
+                message = "Access denied.",
             ),
         )
     }

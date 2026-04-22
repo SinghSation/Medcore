@@ -8,10 +8,9 @@ import com.medcore.platform.audit.AuditWriter
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.springframework.security.core.AuthenticationException
-import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint
 import org.springframework.security.web.AuthenticationEntryPoint
 
-// Wraps Spring Security's BearerTokenAuthenticationEntryPoint to emit
+// Wraps the terminal AuthenticationEntryPoint to emit
 // identity.user.login.failure at the resource-server authentication
 // boundary (ADR-003 §7). Invalid JWTs never reach
 // IdentityProvisioningService, so this is the only correct site.
@@ -30,9 +29,15 @@ import org.springframework.security.web.AuthenticationEntryPoint
 // Failure of the audit write propagates; the delegate is invoked only
 // after the audit row is committed. ADR-003 §2: a failed audit fails
 // the audited action.
+//
+// Phase 3G: the default delegate is the Medcore-shaped entry point,
+// which writes the unified ErrorResponse envelope to the response
+// body. Spring's BearerTokenAuthenticationEntryPoint is no longer
+// used — every 401 caller sees the same envelope regardless of how
+// the authentication failure was raised.
 class AuditingAuthenticationEntryPoint(
     private val auditWriter: AuditWriter,
-    private val delegate: AuthenticationEntryPoint = BearerTokenAuthenticationEntryPoint(),
+    private val delegate: AuthenticationEntryPoint,
 ) : AuthenticationEntryPoint {
 
     override fun commence(

@@ -279,12 +279,50 @@ start if the password env var is blank.
 
 ---
 
-## Carry-forward tracked out of 3F.3
+## Error envelope correlation (Phase 3G)
+
+Every 4xx / 5xx response carries the unified `ErrorResponse` envelope
+with a `requestId` field populated from MDC. That field equals the
+response's `X-Request-Id` header AND equals the `request_id` on any
+audit row emitted during the request AND equals the `request_id`
+field in every structured log line from the request. One value,
+four surfaces.
+
+When a caller reports an error response, ask for (or read from the
+body) the `requestId`, then:
+
+```sql
+-- Find any audit rows for this request
+SELECT recorded_at, action, actor_id, outcome, reason
+  FROM audit.audit_event
+ WHERE request_id = '<uuid>'
+ ORDER BY recorded_at;
+```
+
+```bash
+# Find every log line for this request
+docker logs medcore-api 2>&1 | jq -rc 'select(.request_id == "<uuid>")'
+```
+
+Error codes emitted by the backend are a closed set documented in
+`com.medcore.platform.api.ErrorCodes`. The codes (not the messages)
+are the machine-readable signal; two 403 paths (`auth.forbidden` and
+`tenancy.forbidden`) deliberately share the IDENTICAL message
+`"Access denied."` so a probing caller cannot distinguish them
+without authorization.
+
+---
+
+## Carry-forward tracked out of Phase 3F / 3G
 
 - 3F.2: OpenTelemetry SDK + traces/metrics (the `/actuator/prometheus`
   endpoint that is currently 404 lands here).
 - 3F.4: `audit.verify_chain()` scheduled job.
 - Build-info / git-commit-info Gradle plugin → separate slice when
   useful (makes `/actuator/info` non-empty).
+- 3G: 400 Bad Request responses remain framework-default — explicit
+  follow-up carry-forward when a real caller cares.
+- 3G: Audit emission on 403 access-denied path → deferred to 3J
+  (needs RBAC for meaningful attribution).
 - Log-aggregation / shipping infra is an explicit non-goal at Phase
   3F; revisited in Phase 3I (CloudWatch + deployment baseline).

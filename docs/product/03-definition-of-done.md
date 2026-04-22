@@ -1,7 +1,7 @@
 ---
 status: Active
 last_reviewed: 2026-04-22
-next_review: 2026-05-05
+next_review: 2026-05-22
 cadence: stable-amended-on-phase-close
 owner: Repository owner
 ---
@@ -196,7 +196,94 @@ carry-forward item remains open.
 
 <!-- TODO(content): populated when 3F.4 opens. -->
 
-### 3.2 Phases 3G, 3H, 3I, 3J, 3K, 3L, 3M
+### 3.2 Phase 3G — Error standardization
+
+- [ ] Every 4xx / 5xx response from the backend uses the shared
+      `ErrorResponse` envelope (`code`, `message`, `requestId`,
+      `details`). Wire shape unchanged from 3B.1; only population
+      rules tightened.
+- [ ] Every error response populates `requestId` from MDC
+      (`MdcKeys.REQUEST_ID`, Phase 3F.1 substrate). Body `requestId`
+      MUST equal the response's `X-Request-Id` header —
+      `HeaderBodyRequestIdParityTest` asserts across every status
+      class.
+- [ ] **401 Unauthorized.** Unified envelope with code
+      `auth.unauthenticated` and stable message `"Authentication
+      required."` regardless of cause. `WWW-Authenticate: Bearer`
+      header preserved (RFC 6750 §3). Emitted by
+      `MedcoreAuthenticationEntryPoint` (new in 3G) wrapped by the
+      existing `AuditingAuthenticationEntryPoint`. Audit emission of
+      `identity.user.login.failure` behaviour is unchanged.
+- [ ] **403 Forbidden.** Two codes, one message. `auth.forbidden`
+      (emitted by `MedcoreAccessDeniedHandler` for filter-chain
+      denials and by `GlobalExceptionHandler.onAccessDenied` for
+      method-security denials) and `tenancy.forbidden` (emitted by
+      `TenantContextFilter` and `TenancyExceptionHandler`). Both
+      MUST use the IDENTICAL message `"Access denied."` — "tenant"
+      never appears in any 403 message body (Rule 01 §enumeration).
+- [ ] **404 Not Found.** Code `resource.not_found`. Handlers:
+      `NoResourceFoundException` (no-such-route),
+      `EntityNotFoundException` (JPA), `EmptyResultDataAccessException`.
+- [ ] **409 Conflict.** Code `resource.conflict`. Handlers:
+      `OptimisticLockingFailureException`,
+      `ObjectOptimisticLockingFailureException`, and
+      `DataIntegrityViolationException` IFF the underlying PostgreSQL
+      SQLSTATE is `23505` (unique), `23503` (FK), or `23P01`
+      (exclusion). Check-constraint and NOT-NULL violations DO NOT
+      map to 409.
+- [ ] **422 Unprocessable Entity.** Two codes.
+      `request.validation_failed` for `MethodArgumentNotValidException`,
+      `HandlerMethodValidationException`, `ConstraintViolationException`,
+      AND for `DataIntegrityViolationException` with SQLSTATE `23502`
+      (not-null) or `23514` (check). `tenancy.context.required` for
+      `TenantContextMissingException`. Validation payload carries
+      `details.validationErrors = [{field, code}]` — field names only,
+      never field values.
+- [ ] **500 Internal Server Error.** Code `server.error`. Fallback
+      for any uncaught `Throwable` and for
+      `DataIntegrityViolationException` with unrecognised SQLSTATE.
+      Response body carries zero information about the cause — full
+      detail is logged, correlation is exclusively via `requestId`.
+- [ ] **400 Bad Request is EXPLICITLY NOT normalised in Phase 3G.**
+      Spring Boot's default handling for
+      `HttpMessageNotReadableException` (malformed JSON),
+      `MissingServletRequestParameterException`, type-mismatch etc.
+      remains framework-default. Tracked as carry-forward for a
+      future slice.
+- [ ] **Precedence rule documented in code and enforced by
+      `@Order`:** module-specific `@RestControllerAdvice` classes
+      (e.g., `TenancyExceptionHandler`) carry
+      `@Order(Ordered.HIGHEST_PRECEDENCE)` → `GlobalExceptionHandler`
+      carries `@Order(Ordered.LOWEST_PRECEDENCE)` → its `Throwable`
+      fallback within. Module advisers always win over the global
+      one when both would match.
+- [ ] **Leakage discipline tested.** `ErrorResponsePhiLeakageTest`
+      asserts no response body contains stack traces, framework
+      exception class names, SQL fragments, bearer-token values, or
+      the deliberately-seeded "suspicious" exception text from the
+      test-only controller.
+- [ ] **Audit-on-403-access-denied is deliberately deferred to 3J.**
+      Current slice has no RBAC callers of `@PreAuthorize`, so any
+      audit here would be noise without attribution.
+- [ ] **Test-only `ErrorPathsTestController` gated by
+      `@ConditionalOnProperty(value = "medcore.testing.error-paths-controller.enabled",
+      havingValue = "true", matchIfMissing = false)`** — mounts only
+      when explicitly enabled in a test's `@TestPropertySource`.
+      Lives under `src/test/kotlin` so it cannot ship to production
+      regardless.
+- [ ] Security config gains `@EnableMethodSecurity` so `@PreAuthorize`
+      annotations (starting with the denyAll test endpoint) are
+      enforced.
+- [ ] Existing 119/119 tests still green + new tests added
+      (`GlobalExceptionHandlerIntegrationTest`,
+      `ErrorResponsePhiLeakageTest`, `HeaderBodyRequestIdParityTest`).
+- [ ] PHI-exposure review landed: `docs/security/phi-exposure-review-3g.md`.
+- [ ] Runbook updated: `docs/runbooks/observability.md` notes the
+      `requestId` correlation from error body to log line.
+- [ ] Carry-forward closed: uniform 401 envelope (from 3B.1);
+      `TenantContextMissingException` HTTP mapping (from 3B.1).
+
+### 3.3 Phases 3H, 3I, 3J, 3K, 3L, 3M, 3F.2, 3F.4
 
 <!-- TODO(content): per-phase checklists populated as each phase opens
      per ADR-005 §2.4 (living-per-slice cadence). Structure template:
@@ -210,7 +297,7 @@ carry-forward item remains open.
      - [ ] Carry-forward resolved
 -->
 
-### 3.3 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.4 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->

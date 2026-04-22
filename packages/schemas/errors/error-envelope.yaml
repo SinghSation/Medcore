@@ -22,7 +22,21 @@ components:
           type: string
           description: |
             Stable error code slug. Opaque to clients; stable across releases.
-            Example: `auth.unauthenticated`.
+            Phase 3G mints a closed set:
+              - `auth.unauthenticated`      (401)
+              - `auth.forbidden`            (403 — general authorization denial)
+              - `tenancy.forbidden`         (403 — tenancy-scoped; identical
+                                             message to `auth.forbidden` to
+                                             avoid enumeration)
+              - `resource.not_found`        (404)
+              - `resource.conflict`         (409 — state conflict only)
+              - `request.validation_failed` (422 — populates
+                                             `details.validationErrors` with
+                                             `{field, code}`, never values)
+              - `tenancy.context.required`  (422)
+              - `server.error`              (5xx fallback; opaque)
+            400 Bad Request responses remain Spring framework-default in
+            Phase 3G (deliberate non-goal; tracked as carry-forward).
           x-medcore-classification: Internal
         message:
           type: string

@@ -1,11 +1,14 @@
 package com.medcore.platform.security
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.medcore.platform.audit.AuditWriter
 import com.medcore.platform.config.MedcoreOidcProperties
 import java.time.Clock
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Primary
 import org.springframework.security.config.Customizer
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.oauth2.core.OAuth2TokenValidator
@@ -16,6 +19,7 @@ import org.springframework.security.oauth2.jwt.JwtValidators
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
 import org.springframework.security.web.AuthenticationEntryPoint
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.access.AccessDeniedHandler
 
 // Platform-wide Spring Security configuration. Stateless resource-server
 // over /api/**, deny-by-default. Every /api/** path requires a valid OIDC
@@ -28,6 +32,7 @@ import org.springframework.security.web.SecurityFilterChain
 // (ADR-003 §7). Anonymous requests (no Authorization header) still return
 // 401 but are NOT audited — see the entry point for rationale.
 @Configuration(proxyBeanMethods = false)
+@EnableMethodSecurity
 class SecurityConfig {
 
     @Bean
@@ -59,14 +64,34 @@ class SecurityConfig {
         MedcoreJwtAuthenticationConverter(oidcProperties, principalResolver)
 
     @Bean
-    fun auditingAuthenticationEntryPoint(auditWriter: AuditWriter): AuthenticationEntryPoint =
-        AuditingAuthenticationEntryPoint(auditWriter)
+    fun medcoreAuthenticationEntryPoint(objectMapper: ObjectMapper): MedcoreAuthenticationEntryPoint =
+        MedcoreAuthenticationEntryPoint(objectMapper)
+
+    /**
+     * `@Primary` because the apiSecurityFilterChain (and any future
+     * consumer) injecting `AuthenticationEntryPoint` expects the
+     * audit-wrapped variant — the inner [MedcoreAuthenticationEntryPoint]
+     * bean is available only via concrete-type injection as the
+     * delegate for this bean.
+     */
+    @Bean
+    @Primary
+    fun auditingAuthenticationEntryPoint(
+        auditWriter: AuditWriter,
+        medcoreAuthenticationEntryPoint: MedcoreAuthenticationEntryPoint,
+    ): AuthenticationEntryPoint =
+        AuditingAuthenticationEntryPoint(auditWriter, medcoreAuthenticationEntryPoint)
+
+    @Bean
+    fun medcoreAccessDeniedHandler(objectMapper: ObjectMapper): AccessDeniedHandler =
+        MedcoreAccessDeniedHandler(objectMapper)
 
     @Bean
     fun apiSecurityFilterChain(
         http: HttpSecurity,
         converter: MedcoreJwtAuthenticationConverter,
         auditingEntryPoint: AuthenticationEntryPoint,
+        accessDeniedHandler: AccessDeniedHandler,
     ): SecurityFilterChain {
         http
             .securityMatcher("/api/**")
@@ -78,8 +103,12 @@ class SecurityConfig {
                     jwt.jwtAuthenticationConverter(converter)
                 }
                 oauth2.authenticationEntryPoint(auditingEntryPoint)
+                oauth2.accessDeniedHandler(accessDeniedHandler)
             }
-            .exceptionHandling { it.authenticationEntryPoint(auditingEntryPoint) }
+            .exceptionHandling {
+                it.authenticationEntryPoint(auditingEntryPoint)
+                it.accessDeniedHandler(accessDeniedHandler)
+            }
             .httpBasic { it.disable() }
             .formLogin { it.disable() }
             .logout(Customizer.withDefaults())
