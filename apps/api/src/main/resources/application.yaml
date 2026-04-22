@@ -2,10 +2,20 @@ spring:
   application:
     name: medcore-api
 
+  # Application (runtime) datasource — connects as the LEAST-PRIVILEGE
+  # role `medcore_app` so RLS policies installed by V8 actually enforce
+  # on live request traffic (Phase 3E). Per ADR-001 §2 + ADR-004,
+  # connecting as a superuser here would bypass RLS by Postgres design
+  # and would block the Phase 4 / PHI-bearing slices.
+  #
+  # `MEDCORE_DB_APP_PASSWORD` MUST be set out-of-band (secret manager
+  # in production; env var in local dev). The same value is supplied to
+  # Flyway as a placeholder so V10's `ALTER ROLE medcore_app WITH
+  # PASSWORD '${app_password}'` materialises the role correctly.
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:medcore_dev}
-    username: ${POSTGRES_USER:medcore}
-    password: ${POSTGRES_PASSWORD:}
+    username: ${MEDCORE_DB_APP_USER:medcore_app}
+    password: ${MEDCORE_DB_APP_PASSWORD:}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 2
@@ -20,8 +30,16 @@ spring:
         jdbc:
           time_zone: UTC
 
+  # Migrator datasource — owns DDL. In local dev / tests the migrator
+  # is the container superuser; in production it is the dedicated
+  # `medcore_migrator` role provisioned by ops. The `placeholders.app_password`
+  # entry feeds V10's role-password ALTER from the same env var the
+  # application uses to connect.
   flyway:
     enabled: true
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:medcore_dev}
+    user: ${MEDCORE_DB_MIGRATOR_USER:${POSTGRES_USER:medcore}}
+    password: ${MEDCORE_DB_MIGRATOR_PASSWORD:${POSTGRES_PASSWORD:}}
     locations:
       - classpath:db/migration/identity
       - classpath:db/migration/tenancy
@@ -36,6 +54,23 @@ spring:
     validate-on-migrate: true
 
 medcore:
+  db:
+    app:
+      # Runtime password for the application's `medcore_app` Postgres role.
+      # Sourced from `MEDCORE_DB_APP_PASSWORD` (env / secret manager).
+      # The application connects with this value at startup; in production
+      # ops provisions the role's password to match this out-of-band.
+      password: ${MEDCORE_DB_APP_PASSWORD:}
+
+      # Off by default. When `false` (production-default) the application
+      # process only VERIFIES the password env var is non-empty — it does
+      # NOT call `ALTER ROLE` and does not need migrator-level capability
+      # for role rotation. When `true` (local / tests) the application
+      # syncs the role's password against the migrator datasource on every
+      # startup. Set to `true` only in environments where having the
+      # application carry that capability is acceptable.
+      passwordSyncEnabled: ${MEDCORE_DB_APP_PASSWORD_SYNC_ENABLED:false}
+
   oidc:
     # Dev default points at the local mock-oauth2-server (ADR-002). Override
     # at deploy time via environment variables. Production startup rejects

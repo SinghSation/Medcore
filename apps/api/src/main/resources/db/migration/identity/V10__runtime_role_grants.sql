@@ -1,0 +1,83 @@
+-- V10__runtime_role_grants.sql — Phase 3E (runtime datasource role switch)
+--
+-- Phase 3E flips the running application's datasource from the container
+-- superuser (which BYPASSES RLS) to `medcore_app` (which is bound by the
+-- V8 RLS policies). For that to work end-to-end:
+--
+--   1. `medcore_app` must hold every DML right the application needs on
+--      the schemas it currently writes (identity, audit, tenancy).
+--      That is what this migration installs.
+--   2. `medcore_app` must have a known password. That is set OUTSIDE
+--      this migration by a Spring component (`MedcoreAppPasswordSync`)
+--      that runs after Flyway and before JPA opens its first
+--      connection. See the in-line comment under "Grants" below.
+--
+-- The grants here strictly follow the current write surface. Tenancy
+-- writes are deferred to a future admin-surface slice; this migration
+-- does NOT grant medcore_app INSERT/UPDATE/DELETE on tenancy tables.
+-- Audit grants (INSERT, SELECT on audit.audit_event; EXECUTE on
+-- append_event / verify_chain) were already laid down in V7 and V9.
+--
+-- After this migration:
+--   medcore_app has               | medcore_app does NOT have
+--   ----------------------------- | ---------------------------------
+--   USAGE on identity, tenancy,   | DDL of any kind
+--   audit                         |
+--   SELECT, INSERT, UPDATE on     | DELETE on identity.user
+--   identity."user"               |
+--   SELECT on tenancy.tenant +    | INSERT/UPDATE/DELETE on tenancy
+--   tenancy.tenant_membership     | tables
+--   INSERT, SELECT on             | UPDATE/DELETE/TRUNCATE on
+--   audit.audit_event             | audit.audit_event
+--   EXECUTE on audit.append_event,|
+--   audit.verify_chain            | EXECUTE on audit.rebuild_chain
+--   LOGIN with synced password    |
+--
+-- Locking: ALTER ROLE is metadata-only. GRANT statements are
+-- metadata-only. No table data touched. Safe at any scale.
+--
+-- Idempotency: the password ALTER is idempotent (repeated executions
+-- of identical SQL are no-ops if the password text matches; otherwise
+-- they update). GRANT is idempotent.
+--
+-- Rotation: Flyway pins V10 to a single execution. To rotate the
+-- application password later, ops runs an out-of-band
+-- `ALTER ROLE medcore_app WITH PASSWORD '<new>'` against the
+-- migrator connection AND updates `MEDCORE_DB_APP_PASSWORD` for the
+-- application before the next restart. A repeatable-migration approach
+-- can land in a follow-up slice if rotation cadence demands it.
+--
+-- Rollback:
+--   ALTER ROLE medcore_app WITH PASSWORD NULL;
+--   REVOKE INSERT, UPDATE ON identity."user" FROM medcore_app;
+--   REVOKE SELECT ON identity."user" FROM medcore_app;
+--   REVOKE USAGE ON SCHEMA identity FROM medcore_app;
+--   -- And revert the application config to the migrator role.
+-- Acceptable at this phase (no PHI yet bound through medcore_app).
+
+-- -----------------------------------------------------------------------
+-- 1. Grant the runtime DML the application actually needs
+-- -----------------------------------------------------------------------
+-- Note: medcore_app's password is NOT set here. Setting role passwords
+-- belongs to the secret-handling pathway, not the schema migration:
+-- - In production, ops provisions the password from the secret manager.
+-- - In local dev / tests, `MedcoreAppPasswordSync` (a Spring component
+--   that runs after Flyway and before JPA opens its first connection)
+--   reads `MEDCORE_DB_APP_PASSWORD` from the environment and applies
+--   `ALTER ROLE medcore_app WITH PASSWORD …` against the migrator
+--   datasource using a parameterised function call (no inline SQL
+--   interpolation of the password).
+-- This separation also makes password ROTATION an ops procedure rather
+-- than a migration concern.
+GRANT USAGE ON SCHEMA identity TO medcore_app;
+
+-- identity.user: JIT provisioning issues SELECT (find by issuer/subject),
+-- INSERT (first-time provisioning), and UPDATE (claim-refresh path
+-- inside IdentityProvisioningService.applyClaimRefresh). DELETE is NOT
+-- granted — soft-delete or admin pathways will arrive in a later slice
+-- and need their own ADR + grants.
+GRANT SELECT, INSERT, UPDATE ON identity."user" TO medcore_app;
+
+-- Defensive REVOKE on the operations the runtime role MUST NOT have on
+-- this table.
+REVOKE DELETE, TRUNCATE ON identity."user" FROM medcore_app;

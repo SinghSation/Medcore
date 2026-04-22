@@ -366,7 +366,127 @@ The `AuditV2ChainTest` integration test exercises the full loop:
 happy-path appends → `verify_chain()` clean → tamper via superuser
 → `verify_chain()` reports the break with the correct reason code.
 
-## 14. Related
+## 14. Runtime datasource role switch (Phase 3E)
+
+> **Phase 3E flips the running application from a superuser
+> datasource to `medcore_app`.** RLS policies installed by V8 are
+> now enforced for live request traffic, not just for tests that
+> connect directly as `medcore_app`. This closes the deferred
+> runtime-enforcement gap from Phase 3D.
+
+### Datasource model
+
+There are now TWO database connections at runtime:
+
+- **Application datasource** (`spring.datasource.*`) connects as
+  `medcore_app` — non-superuser, RLS-bound, restricted DML grants.
+  JPA, all repositories, the audit writer, and the tenancy session
+  context all use this connection.
+- **Migrator / Flyway datasource** (`spring.flyway.*`) connects as
+  the dedicated migrator role (the container superuser locally; a
+  pre-provisioned `medcore_migrator` role in production). Owns
+  schema DDL and all migrations.
+
+`MedcoreAppPasswordSync` (`platform/persistence/`) runs after Flyway
+and before JPA opens its first connection. Two execution modes,
+controlled by `medcore.db.app.passwordSyncEnabled`:
+
+- **`false` (production-default).** VERIFY-ONLY. Asserts
+  `MEDCORE_DB_APP_PASSWORD` is non-blank and stops there. The
+  application process does NOT call `ALTER ROLE`. The role's
+  password is provisioned out-of-band by ops / the secret manager.
+  This keeps the runtime app process from exercising
+  role-rotation capability against the database.
+- **`true` (local / tests).** SYNC. After verification, runs
+  `ALTER ROLE medcore_app WITH PASSWORD …` against the migrator
+  datasource via a parameter-bound `pg_temp` function (no string
+  interpolation of the password into SQL). Convenient for
+  fresh-container test runs.
+
+Production posture: leave `MEDCORE_DB_APP_PASSWORD_SYNC_ENABLED`
+unset or `false`. Ops provisions the role + password out-of-band
+and the application only verifies the configured value matches
+what's in the DB at connect time.
+
+> **Residual scope.** Even in VERIFY-only mode, the application
+> process still has Flyway running in-process at startup, which
+> means migrator credentials live in JVM memory until Flyway
+> completes its first cycle. Eliminating that residual requires
+> moving Flyway out-of-process for production (CI/CD migration
+> step or k8s init container) — tracked as a deferred ops slice.
+> The verify/sync split addresses the immediate concern: the
+> running application does not EXERCISE role-rotation capability
+> in production, even though Flyway is technically in-process.
+
+`DatabaseRoleSafetyCheck` listens for `ApplicationStartedEvent`,
+queries `current_user`/`pg_roles.rolsuper` against the application
+datasource, and throws `REFUSING TO START` if connected as a
+superuser. The application does not begin serving traffic in that
+state — closing the "I think RLS is on but the app role is super"
+failure mode.
+
+### Required environment variables
+
+For local dev (running `make api-dev`):
+
+```
+MEDCORE_DB_APP_USER=medcore_app
+MEDCORE_DB_APP_PASSWORD=<choose-a-local-password>
+
+# Opt INTO the in-process role password sync. ONLY for local dev /
+# tests. NEVER set in production — production password sync is an
+# ops responsibility, not the application's.
+MEDCORE_DB_APP_PASSWORD_SYNC_ENABLED=true
+
+# Migrator credentials (default to the Postgres superuser locally)
+# MEDCORE_DB_MIGRATOR_USER=medcore   # default
+# MEDCORE_DB_MIGRATOR_PASSWORD=...   # falls back to POSTGRES_PASSWORD
+```
+
+For production: ops sets `MEDCORE_DB_APP_PASSWORD` from the secret
+manager and provisions a dedicated `medcore_migrator` role with its
+own password supplied via `MEDCORE_DB_MIGRATOR_*`.
+
+### Quickstart for local dev
+
+```bash
+# 1. Start postgres + mock OIDC
+docker compose up -d postgres mock-oauth2-server
+
+# 2. Pick (or rotate) a local app-role password
+export MEDCORE_DB_APP_PASSWORD='local-only-do-not-reuse'
+
+# 3. Start the app
+make api-dev
+# Expected log lines:
+#   - Flyway migrating...
+#   - DatabaseRoleSafetyCheck reports current_user=medcore_app, rolsuper=false
+#   - Tomcat started on port 8080
+```
+
+If the app refuses to start with `REFUSING TO START: ... superuser`,
+the application config is pointing at the migrator role — check
+`MEDCORE_DB_APP_USER` / `MEDCORE_DB_APP_PASSWORD`.
+
+### Tests
+
+`TestcontainersConfiguration` configures both datasources explicitly
+and exposes a third `adminDataSource` bean (qualified) for fixtures
+that need to bypass medcore_app's grant restrictions (DELETE on
+audit_event between tests, INSERT on tenancy tables, ALTER ROLE,
+etc.). Tests autowire it explicitly with the `adminDataSource`
+qualifier; the unqualified `@Primary` datasource always resolves to
+the medcore_app one so accidental misuse fails loudly.
+
+`RuntimeRoleEnforcementTest` proves the runtime claim: the
+application datasource is medcore_app (not a superuser), RLS hides
+tenancy rows when no GUC is set, and live HTTP requests respect
+RLS-induced visibility.
+
+`DatabaseRoleSafetyCheckTest` proves the startup guard fires for
+both passing and failing role configurations.
+
+## 15. Related
 
 - **ADR-001** — PostgreSQL + Flyway + row-level tenancy.
 - `.cursor/rules/03-db-migrations.mdc` — migration rules (applies

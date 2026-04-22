@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 
@@ -12,7 +13,10 @@ import org.springframework.context.annotation.Import
 @Import(TestcontainersConfiguration::class)
 class MedcoreApiApplicationTests {
 
+    // Use the admin datasource: medcore_app does not have SELECT on
+    // flyway.flyway_schema_history; the migrator/superuser does.
     @Autowired
+    @Qualifier("adminDataSource")
     lateinit var dataSource: DataSource
 
     @Test
@@ -73,6 +77,7 @@ class MedcoreApiApplicationTests {
                 Row("7", "V7__audit_event.sql", true),
                 Row("8", "V8__tenancy_rls.sql", true),
                 Row("9", "V9__audit_event_v2.sql", true),
+                Row("10", "V10__runtime_role_grants.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

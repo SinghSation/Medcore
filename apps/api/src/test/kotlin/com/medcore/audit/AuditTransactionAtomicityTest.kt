@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.web.client.TestRestTemplate
@@ -60,6 +61,7 @@ class AuditTransactionAtomicityTest {
     lateinit var mockOAuth2Server: MockOAuth2Server
 
     @Autowired
+    @Qualifier("adminDataSource")
     lateinit var dataSource: DataSource
 
     @Autowired

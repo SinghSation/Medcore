@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.client.TestRestTemplate
 import org.springframework.context.annotation.Import
@@ -34,6 +35,7 @@ class AuditTenancyIntegrationTest {
     lateinit var mockOAuth2Server: MockOAuth2Server
 
     @Autowired
+    @Qualifier("adminDataSource")
     lateinit var dataSource: DataSource
 
     private lateinit var jdbc: JdbcTemplate
@@ -139,17 +141,25 @@ class AuditTenancyIntegrationTest {
         )
         assertEquals(HttpStatus.FORBIDDEN, response.statusCode)
 
+        // With Phase 3E runtime RLS enforcement, alice (a non-member of
+        // beta-clinic) cannot see the tenant row at all — the
+        // p_tenant_select_by_active_membership policy filters it out.
+        // The service therefore reports `slug_unknown` (not
+        // `not_a_member`) and the audit row's `tenantId` is null.
+        // This is anti-enumeration in action: from the audit
+        // perspective and from the wire response, "not a member" and
+        // "tenant doesn't exist" are now indistinguishable.
         val rows = auditRowsFor(action = "tenancy.membership.denied")
         assertEquals(1, rows.size)
         val row = rows.single()
         assertEquals("DENIED", row.outcome)
         assertEquals(alice.toString(), row.actorId)
-        assertEquals(beta.toString(), row.tenantId)
-        assertEquals("not_a_member", row.reason)
+        assertEquals(null, row.tenantId)
+        assertEquals("slug_unknown", row.reason)
     }
 
     @Test
-    fun `path-driven denial distinguishes tenant_inactive from membership_inactive`() {
+    fun `path-driven denials produce coarsened reason codes under runtime RLS`() {
         val alice = provisionUser("alice")
         val suspendedTenant = seedTenant("suspended-co", status = "SUSPENDED")
         seedMembership(suspendedTenant, alice)
@@ -174,13 +184,24 @@ class AuditTenancyIntegrationTest {
         )
         assertEquals(HttpStatus.FORBIDDEN, membershipInactive.statusCode)
 
+        // Phase 3E behavior change (intentional, anti-enumeration):
+        //   - For `suspended-co`, alice has an ACTIVE membership in a
+        //     SUSPENDED tenant. The tenant policy keys on membership
+        //     status only, so alice CAN see the tenant row → the
+        //     service finds it, sees tenant.status = SUSPENDED,
+        //     emits `tenant_inactive` with the tenant id.
+        //   - For `paused-team`, alice's membership is SUSPENDED, so
+        //     RLS hides the tenant entirely — the service treats it
+        //     as `slug_unknown`. From the wire (and the audit log)
+        //     this is indistinguishable from a tenant that doesn't
+        //     exist, which is the anti-enumeration property we want.
         val rows = auditRowsFor(action = "tenancy.membership.denied")
         assertEquals(2, rows.size)
         val reasons = rows.map { it.reason }.toSet()
         assertEquals(
-            setOf("tenant_inactive", "membership_inactive"),
+            setOf("tenant_inactive", "slug_unknown"),
             reasons,
-            "each denial case gets a distinct coarse reason code",
+            "RLS coarsens membership_inactive into slug_unknown — anti-enumeration",
         )
     }
 

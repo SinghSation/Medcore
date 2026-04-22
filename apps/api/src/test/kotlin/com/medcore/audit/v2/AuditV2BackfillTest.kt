@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
@@ -38,6 +39,7 @@ import org.springframework.jdbc.core.JdbcTemplate
 class AuditV2BackfillTest {
 
     @Autowired
+    @Qualifier("adminDataSource")
     lateinit var dataSource: DataSource
 
     private lateinit var jdbc: JdbcTemplate
