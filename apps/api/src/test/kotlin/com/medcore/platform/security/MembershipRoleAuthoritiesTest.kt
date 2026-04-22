@@ -20,6 +20,7 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.TENANT_DELETE,
                 MedcoreAuthority.MEMBERSHIP_READ,
                 MedcoreAuthority.MEMBERSHIP_INVITE,
+                MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
                 MedcoreAuthority.MEMBERSHIP_REMOVE,
             )
     }
@@ -31,6 +32,9 @@ class MembershipRoleAuthoritiesTest {
 
         assertThat(admin).doesNotContain(MedcoreAuthority.TENANT_DELETE)
         assertThat(owner - admin).containsExactly(MedcoreAuthority.TENANT_DELETE)
+        // Both OWNER and ADMIN hold MEMBERSHIP_ROLE_UPDATE (Phase 3J.N);
+        // role-vs-role escalation guards live in the policy layer.
+        assertThat(admin).contains(MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE)
     }
 
     @Test

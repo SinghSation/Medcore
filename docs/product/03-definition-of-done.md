@@ -960,14 +960,144 @@ invitation flow (PENDING lifecycle) remains deferred.
     returns 422 on invalid enum (currently 400 via Jackson)
     → minor hardening slice
 
-#### 3.4.4 Phase 3J.4+ — Remaining tenancy writes
+#### 3.4.4 Phase 3J.N — Membership role update + revocation
 
-<!-- TODO(content): populated as each endpoint slice opens. Each
-     slice's DoD row MUST assert: WriteGate is the only mutation
-     entry point for the endpoint; onSuccess populates
-     `intent:<command-slug>`; authz denial emits
-     AUTHZ_WRITE_DENIED; integration tests cover happy path +
-     cross-tenant RLS refusal + role-matrix. -->
+Third concrete command-family through the 3J.1 framework. Closes
+the `MEMBERSHIP_ROLE_UPDATE` + `MEMBERSHIP_REMOVE` authorities
+and establishes Medcore's first **aggregate-state invariant**
+(last-OWNER). Two endpoints ship together because they share the
+authority map update, the last-OWNER invariant, the audit shape
+discipline, and the escalation-guard pattern.
+
+- [ ] `PATCH /api/v1/tenants/{slug}/memberships/{id}` — role
+      change; 200 OK with `WriteResponse<MembershipResponse>`.
+- [ ] `DELETE /api/v1/tenants/{slug}/memberships/{id}` —
+      soft-delete via status → REVOKED; 204 No Content with
+      `X-Request-Id` header for correlation.
+- [ ] New authority `MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE`
+      added; OWNER + ADMIN sets updated; tests updated.
+- [ ] Six-file command stack per endpoint in
+      `com.medcore.tenancy.write`: Command, Validator (role-update
+      only — revoke has no body), Policy, Handler, Auditor,
+      snapshot type. Pattern identical to 3J.2/3J.3.
+- [ ] `LastOwnerInvariant` helper injected into both handlers.
+      Acquires `PESSIMISTIC_WRITE` row lock on active-OWNER rows
+      via `findAndLockByTenantRoleStatus` repo method with
+      `@Lock(LockModeType.PESSIMISTIC_WRITE)`. Concurrent
+      demotions serialise correctly.
+- [ ] `WriteConflictException(code)` added to `platform/write/`;
+      `GlobalExceptionHandler.onWriteConflict` maps to 409
+      `resource.conflict` with `details.reason = <code>`.
+- [ ] Three escalation guards in place and tested:
+  - Base-authority check (policy): `MEMBERSHIP_ROLE_UPDATE`
+    or `MEMBERSHIP_REMOVE` required.
+  - Promotion-to-OWNER guard (policy): `newRole == OWNER`
+    requires `TENANT_DELETE`.
+  - **Target-OWNER guard (handler, new pattern):**
+    `target.role == OWNER` requires caller hold `TENANT_DELETE`.
+    Evaluated in the handler inside the gate's transaction
+    because the target row is visible only after
+    `TenancyRlsTxHook` sets the RLS GUC. Thrown
+    `WriteAuthorizationException` is caught by `WriteGate` and
+    routed through `onDenied` (framework extension).
+- [ ] **Last-OWNER invariant** (ADR-007 §2.12): every tenant
+      retains ≥1 ACTIVE OWNER at all times. Enforced via
+      `LastOwnerInvariant.assertAtLeastOneOtherActiveOwner()` with
+      pessimistic locking; throws `WriteConflictException("last_owner_in_tenant")`
+      → 409. Sole OWNER cannot demote or revoke themselves.
+- [ ] V13 migration
+      `V13__tenancy_membership_rls_admin_read.sql`:
+  - `medcore_rls_helper` role (NOLOGIN, NOSUPERUSER, BYPASSRLS)
+    owns RLS-helper functions.
+  - `tenancy.caller_is_tenant_admin(tenant_id, caller_id)`
+    SECURITY DEFINER function, owned by `medcore_rls_helper`,
+    `SET search_path = tenancy, pg_temp`, EXECUTE granted to
+    `medcore_app` + `medcore_migrator` (REVOKE FROM PUBLIC
+    first).
+  - New OR'd SELECT policy `p_membership_select_by_admin_or_owner`
+    calls the SECURITY DEFINER function (breaks RLS recursion).
+  - GRANT USAGE on schema `tenancy` + SELECT on
+    `tenant_membership` to `medcore_rls_helper` (BYPASSRLS only
+    skips RLS, grants still required).
+- [ ] `FlywayMigrationStateCheck.MIN_EXPECTED_INSTALLED_RANK`
+      bumped from 12 to 13.
+- [ ] `MedcoreApiApplicationTests.flyway history records expected
+      migrations in order` updated for V13.
+- [ ] Two new `AuditAction` entries:
+  `TENANCY_MEMBERSHIP_ROLE_UPDATED` (`tenancy.membership.role_updated`)
+  and `TENANCY_MEMBERSHIP_REVOKED` (`tenancy.membership.revoked`).
+  Registry discipline applied: enum + KDoc + test emission +
+  review-pack callout.
+- [ ] **Audit-shape contract extended from 3J.3:**
+  - Success + denial rows use `resource_type = "tenant_membership"`
+    AND `resource_id = <target membership UUID>` (always known
+    — URL path carries the id).
+  - Success `reason` encodes transition tokens:
+    `intent:tenancy.membership.update_role|from:OWNER|to:ADMIN`
+    or `intent:tenancy.membership.remove|prior_role:OWNER`.
+  - Denial `reason` carries closed-enum `WriteDenialReason.code`
+    slug.
+  - `(resource_type, outcome)` remains the canonical query pair
+    — 3J.N asymmetry is resolved (target always exists here).
+- [ ] **No-op suppression** on both endpoints:
+  - PATCH-to-same-role → 200 no audit row, row_version unchanged.
+  - DELETE-of-already-REVOKED → 204 no audit row, no state change.
+  - Inherits 3J.2 precedent.
+- [ ] **Cross-tenant ID probing masked as 404** — if the
+      `{membershipId}` belongs to a different tenant than
+      `{slug}`, both handlers throw `EntityNotFoundException`.
+      Response body identical to "unknown membership" → no
+      existence disclosure.
+- [ ] `docs/security/phi-exposure-review-3j-n.md` landed.
+      Risk: None (tenancy metadata; no clinical path).
+- [ ] ADR-007 additions:
+  - §2.12 — Last-OWNER invariant (NORMATIVE)
+  - §2.13 — State-dependent authorization in the handler
+    (WriteGate framework extension)
+  - §2.14 — V13 admin-read RLS policy + SECURITY DEFINER helper
+- [ ] Tests:
+  - `UpdateTenantMembershipRoleValidatorTest` (3): happy path,
+    blank slug, uppercase slug.
+  - `UpdateTenantMembershipRoleIntegrationTest` (20): full
+    matrix, escalation guards, last-OWNER 409s, no-op 200
+    no-audit, cross-tenant 404, requestId parity, SUSPENDED
+    OWNER doesn't count toward active-OWNER floor.
+  - `RevokeTenantMembershipIntegrationTest` (13): full matrix,
+    target-OWNER guard, last-OWNER 409s, idempotent-REVOKED
+    204 no-audit, cross-tenant 404.
+  - `MembershipRoleAuthoritiesTest`: updated cardinality +
+    MEMBERSHIP_ROLE_UPDATE presence assertion.
+- [ ] Existing 265 tests still green; total after 3J.N:
+      **301/301 across 54 suites (+36)**.
+- [ ] Carry-forward closed by 3J.N:
+  - `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint
+    (3J.3 → 3J.N)
+  - `DELETE /memberships/{id}` member-removal endpoint
+    (3J.3 → 3J.N)
+  - Partial closure of "V13+ SECURITY DEFINER `tenancy.resolve_authority`"
+    — V13 delivered a narrower `caller_is_tenant_admin` helper
+    that serves the admin-read use case. The MEMBERSHIP_SUSPENDED
+    collapse from 3J.2 (caller-suspended-cannot-see-tenant) is
+    NOT fixed by this (different code path — V8's tenant-level
+    policy is unchanged) and remains a carry-forward.
+- [ ] Carry-forward opened by 3J.N:
+  - Deferred CHECK trigger at commit time for the last-OWNER
+    invariant (closes the phantom-INSERT window of the
+    pessimistic-lock approach) → Phase 7 or earlier if warranted.
+  - Membership-role-update audit payload column for structured
+    `from`/`to` capture (currently encoded in `reason` as
+    closed-enum tokens) → Phase 7 bundled with the audit-schema-
+    evolution ADR.
+- [ ] Carry-forward INHERITED unchanged from 3J.3:
+  - MEMBERSHIP_SUSPENDED → NOT_A_MEMBER RLS collapse (V8 tenant
+    policy; separate from V13's membership-table expansion)
+  - Audit payload column for before/after state → Phase 7
+  - If-Match precondition header on PATCH → 3L or when a client
+    demands it
+  - ArchUnit WriteGate-exclusivity rule → 3I
+  - PhiRlsTxHook sibling → 4A
+  - Custom MembershipRole deserialiser for 422 on invalid enum
+    (still valid for 3J.N's PATCH body parsing)
 
 ### 3.5 Phases 3I, 3K, 3L, 3M
 
@@ -994,7 +1124,8 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.3 DoD populated — second
-concrete WriteGate endpoint; §3.4.3 membership-invite row added
-with the ADR-007 §4.9 escalation-guard discipline). Next review:
-2026-05-22, or on the next phase opening (whichever is sooner).*
+*Last reviewed: 2026-04-22 (Phase 3J.N DoD populated — two
+endpoints + first aggregate-state invariant; §3.4.4 last-OWNER
+row added with ADR-007 §2.12/§2.13/§2.14 framework extensions).
+Next review: 2026-05-22, or on the next phase opening (whichever
+is sooner).*

@@ -97,15 +97,35 @@ class WriteGate<CMD, R>(
         // Steps 3–6 — Success path. Transaction-owned execute +
         // audit-success. If either throws, the template rolls the
         // transaction back atomically.
-        return txTemplate.execute {
-            // Step 3a — Prepare tx-local state (e.g., RLS GUCs) so
-            // the handler's DB reads/writes are scoped to the caller.
-            // Runs INSIDE the gate's transaction; state survives the
-            // handler but expires at commit.
-            txHook?.beforeExecute(context)
-            val result = execute(command)
-            auditor.onSuccess(command, result, context)
-            result
-        }!! // Template returns non-null because our body always returns.
+        //
+        // A `WriteAuthorizationException` thrown from INSIDE the
+        // transaction (e.g., by a handler performing a state-
+        // dependent authz guard that the policy cannot evaluate
+        // before the tx opens) is caught here and routed through
+        // `auditor.onDenied` — same treatment as policy-thrown
+        // denials (Phase 3J.N). The rolled-back transaction
+        // guarantees no partial mutation survives.
+        return try {
+            txTemplate.execute {
+                // Step 3a — Prepare tx-local state (e.g., RLS GUCs) so
+                // the handler's DB reads/writes are scoped to the caller.
+                // Runs INSIDE the gate's transaction; state survives the
+                // handler but expires at commit.
+                txHook?.beforeExecute(context)
+                val result = execute(command)
+                auditor.onSuccess(command, result, context)
+                result
+            }!! // Template returns non-null because our body always returns.
+        } catch (ex: WriteAuthorizationException) {
+            try {
+                auditor.onDenied(command, context, ex.reason)
+            } catch (auditFailure: Throwable) {
+                log.error(
+                    "WriteGate: handler-thrown denial audit emission failed for reason=${ex.reason.code}",
+                    auditFailure,
+                )
+            }
+            throw ex
+        }
     }
 }

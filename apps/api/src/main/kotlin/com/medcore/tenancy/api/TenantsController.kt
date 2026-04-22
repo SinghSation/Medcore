@@ -13,15 +13,23 @@ import com.medcore.tenancy.service.TenantMembershipResult
 import com.medcore.tenancy.write.InviteTenantMembershipCommand
 import com.medcore.tenancy.write.InviteTenantMembershipHandler
 import com.medcore.tenancy.write.MembershipSnapshot
+import com.medcore.tenancy.write.RevokeSnapshot
+import com.medcore.tenancy.write.RevokeTenantMembershipCommand
+import com.medcore.tenancy.write.RevokeTenantMembershipHandler
+import com.medcore.tenancy.write.RoleUpdateSnapshot
 import com.medcore.tenancy.write.TenantSnapshot
 import com.medcore.tenancy.write.UpdateTenantDisplayNameCommand
 import com.medcore.tenancy.write.UpdateTenantDisplayNameHandler
+import com.medcore.tenancy.write.UpdateTenantMembershipRoleCommand
+import com.medcore.tenancy.write.UpdateTenantMembershipRoleHandler
 import jakarta.validation.Valid
+import java.util.UUID
 import org.slf4j.MDC
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -52,6 +60,10 @@ class TenantsController(
     private val updateTenantDisplayNameHandler: UpdateTenantDisplayNameHandler,
     private val inviteTenantMembershipGate: WriteGate<InviteTenantMembershipCommand, MembershipSnapshot>,
     private val inviteTenantMembershipHandler: InviteTenantMembershipHandler,
+    private val updateTenantMembershipRoleGate: WriteGate<UpdateTenantMembershipRoleCommand, RoleUpdateSnapshot>,
+    private val updateTenantMembershipRoleHandler: UpdateTenantMembershipRoleHandler,
+    private val revokeTenantMembershipGate: WriteGate<RevokeTenantMembershipCommand, RevokeSnapshot>,
+    private val revokeTenantMembershipHandler: RevokeTenantMembershipHandler,
 ) {
 
     @GetMapping(produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -167,6 +179,77 @@ class TenantsController(
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
         return ResponseEntity.status(HttpStatus.CREATED).body(responseBody)
+    }
+
+    /**
+     * Role update (Phase 3J.N). Requires
+     * `MEMBERSHIP_ROLE_UPDATE` + target-OWNER guard (ADMIN cannot
+     * modify an OWNER) + escalation guard (only OWNER can promote
+     * to OWNER) + last-OWNER invariant (cannot demote the last
+     * active OWNER; enforced in the handler with a pessimistic
+     * row lock so concurrent demotions serialise).
+     *
+     * `Idempotency-Key` header remains shape-only (same status as
+     * 3J.3 — not deduped). Same-role PATCHes are no-ops: 200 with
+     * no audit row and no row_version bump.
+     */
+    @PatchMapping(
+        "/{slug}/memberships/{membershipId}",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun updateMembershipRole(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable membershipId: UUID,
+        @Valid @RequestBody body: UpdateMembershipRoleRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): WriteResponse<MembershipResponse> {
+        val command = UpdateTenantMembershipRoleCommand(
+            slug = slug,
+            membershipId = membershipId,
+            newRole = body.role!!,
+        )
+        val context = WriteContext(
+            principal = principal,
+            idempotencyKey = idempotencyKey,
+        )
+        val result = updateTenantMembershipRoleGate.apply(command, context) { cmd ->
+            updateTenantMembershipRoleHandler.handle(cmd, context)
+        }
+        return WriteResponse(
+            data = MembershipResponse.from(result.snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+    }
+
+    /**
+     * Membership revocation (Phase 3J.N). Soft-delete via
+     * status transition ACTIVE|SUSPENDED → REVOKED. Returns 204
+     * with no body; `X-Request-Id` header carries the correlation.
+     * Idempotent: DELETE-to-already-REVOKED returns 204 with no
+     * state change and no audit row. Last-OWNER invariant applies
+     * (cannot revoke the last active OWNER).
+     */
+    @DeleteMapping("/{slug}/memberships/{membershipId}")
+    fun revokeMembership(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable membershipId: UUID,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<Void> {
+        val command = RevokeTenantMembershipCommand(
+            slug = slug,
+            membershipId = membershipId,
+        )
+        val context = WriteContext(
+            principal = principal,
+            idempotencyKey = idempotencyKey,
+        )
+        revokeTenantMembershipGate.apply(command, context) { cmd ->
+            revokeTenantMembershipHandler.handle(cmd, context)
+        }
+        return ResponseEntity.status(HttpStatus.NO_CONTENT).build()
     }
 
     private fun MembershipDetail.isVisibleOnList(): Boolean =

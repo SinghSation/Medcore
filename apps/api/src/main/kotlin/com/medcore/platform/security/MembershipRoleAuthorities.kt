@@ -35,6 +35,7 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.TENANT_DELETE,
         MedcoreAuthority.MEMBERSHIP_READ,
         MedcoreAuthority.MEMBERSHIP_INVITE,
+        MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
         MedcoreAuthority.MEMBERSHIP_REMOVE,
     )
 
@@ -45,6 +46,7 @@ object MembershipRoleAuthorities {
         // tenant; tenant dissolution belongs to owners.
         MedcoreAuthority.MEMBERSHIP_READ,
         MedcoreAuthority.MEMBERSHIP_INVITE,
+        MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
         MedcoreAuthority.MEMBERSHIP_REMOVE,
     )
 

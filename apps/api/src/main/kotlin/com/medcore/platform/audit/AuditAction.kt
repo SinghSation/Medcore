@@ -101,6 +101,41 @@ enum class AuditAction(val code: String) {
      * with their own action.
      */
     TENANCY_MEMBERSHIP_INVITED("tenancy.membership.invited"),
+
+    // --- Phase 3J.N: membership role update + revoke ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `PATCH /api/v1/tenants/{slug}/memberships/{id}` when an
+     * OWNER/ADMIN changes the role of an existing membership
+     * (Phase 3J.N, ADR-007 §4.9 + §2.12 last-OWNER invariant).
+     *
+     * Normative audit-row shape contract is defined on
+     * [com.medcore.tenancy.write.UpdateTenantMembershipRoleAuditor].
+     * `reason` carries the closed-enum from/to tokens —
+     * `intent:tenancy.membership.update_role|from:OWNER|to:ADMIN`
+     * — so forensic reconstruction does not require joining
+     * pre-change state.
+     *
+     * Suppressed for no-op writes (PATCH to same role), parallel
+     * to [TENANCY_TENANT_UPDATED].
+     */
+    TENANCY_MEMBERSHIP_ROLE_UPDATED("tenancy.membership.role_updated"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `DELETE /api/v1/tenants/{slug}/memberships/{id}` when an
+     * OWNER/ADMIN soft-deletes a membership (Phase 3J.N).
+     *
+     * Action verb matches the DB state transition
+     * (`status: ACTIVE | SUSPENDED → REVOKED`). User intent
+     * (`remove`) lives in the `reason` prefix. `prior_role:<X>`
+     * embedded so forensic queries can isolate OWNER revocations
+     * without historical joins.
+     *
+     * Suppressed for idempotent retries on already-REVOKED
+     * memberships (handler returns `changed = false`).
+     */
+    TENANCY_MEMBERSHIP_REVOKED("tenancy.membership.revoked"),
 }
 
 /**

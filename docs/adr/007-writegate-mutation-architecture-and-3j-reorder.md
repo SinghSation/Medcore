@@ -208,6 +208,84 @@ layer so every future mutation inherits the correct behaviour;
 future PHI writes (Phase 4A+) will wire a companion
 `PhiRlsTxHook` that additionally sets `app.current_tenant_id`.
 
+### 2.12 Last-OWNER invariant (first aggregate-state rule) — Phase 3J.N
+
+**Added in 3J.N.** Every tenant in Medcore MUST have at least one
+ACTIVE OWNER at all times. Without this guarantee, a tenant can
+become permanently unmanageable (no OWNER → no `TENANT_DELETE`,
+no escalation recovery path).
+
+**This is Medcore's FIRST first-class invariant that depends on
+aggregate state across multiple rows,** rather than the command
+plus a single target row. Every future invariant of the same shape
+(minimum-active-users, required-role-present, cross-entity
+constraints) follows the same pattern.
+
+**Enforcement layer (3J.N):** application-layer check in
+`LastOwnerInvariant.assertAtLeastOneOtherActiveOwner()` using a
+`PESSIMISTIC_WRITE` row lock on all currently-active OWNER rows
+for the tenant. The lock serialises concurrent demotions that
+would race past a naïve count-and-check at READ COMMITTED
+isolation — two transactions each reading `count=2`, each
+concluding "safe," and both proceeding. Throws
+`WriteConflictException("last_owner_in_tenant")` → 409
+`resource.conflict` with `details.reason = "last_owner_in_tenant"`.
+
+**Enforcement layer (future, carry-forward):** a deferred CHECK
+trigger at commit time in a future schema-evolution slice closes
+the phantom-read window against a concurrent new-OWNER INSERT
+and provides true defense-in-depth against any future app path
+that bypasses the handler. Tracked in the roadmap ledger.
+
+### 2.13 State-dependent authorization can live in the handler
+
+**Added in 3J.N.** Authorization guards that depend on DB state
+(target's current role, target's tenant, etc.) cannot always run
+in the policy — the policy executes BEFORE the gate's transaction
+opens, which means `TenancyRlsTxHook` has not set
+`app.current_user_id` yet, and RLS-gated reads return nothing.
+
+WriteGate now catches `WriteAuthorizationException` thrown by the
+handler and routes it through `onDenied` the same way as a policy-
+thrown denial. The rolled-back transaction guarantees no partial
+mutation survives. Concretely: the "target-OWNER guard" (ADMIN
+cannot modify or revoke an OWNER) lives in the handler for 3J.N's
+`UpdateTenantMembershipRoleHandler` and `RevokeTenantMembershipHandler`.
+
+This extends WriteGate's contract very slightly: authz decisions
+can be made EITHER in the policy (pre-tx, command-shape only) OR
+in the handler (intra-tx, DB-state-dependent). The audit path is
+identical in both cases.
+
+### 2.14 V13 admin-read RLS policy + SECURITY DEFINER helper
+
+**Added in 3J.N.** V8's `p_membership_select_own` limits SELECT
+visibility on `tenancy.tenant_membership` to the caller's own
+rows. That is correct for read-endpoint use but fails the write
+flow's pre-load step — admins modifying OTHER users' memberships
+cannot SEE those memberships under V8's policy. V13 adds
+`p_membership_select_by_admin_or_owner` (OR'd additive policy)
+that lets OWNER/ADMIN see every membership row in their tenant.
+
+**Why a SECURITY DEFINER helper function:** the naïve policy
+USING clause with an EXISTS subquery against
+`tenancy.tenant_membership` causes "infinite recursion detected
+in policy" because the subquery re-enters the same policy.
+Solution: encapsulate the "is caller admin of this tenant?"
+check inside a SECURITY DEFINER function owned by a new
+`medcore_rls_helper` role with `BYPASSRLS`. The function's
+internal SELECT bypasses all RLS policies on the table, breaking
+the recursion. The role is NOLOGIN — nobody can connect as it
+directly; `medcore_app` receives EXECUTE on the specific function
+only. The BYPASSRLS power is encapsulated in the function body.
+
+This pattern closes the roadmap ledger carry-forward "V13+
+SECURITY DEFINER tenancy.resolve_authority" in a narrower scope:
+we added a helper role + a single-purpose function rather than
+a general-purpose `resolve_authority(slug, uid)`. If future
+slices need broader resolver helpers, they extend this
+infrastructure.
+
 ## 3. Alternatives Considered
 
 ### 3.1 Spring AOP with `@Authorized` annotation

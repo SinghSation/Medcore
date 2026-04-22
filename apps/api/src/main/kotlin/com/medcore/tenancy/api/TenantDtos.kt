@@ -130,3 +130,15 @@ data class InviteMembershipRequest(
     @field:NotNull
     val role: MembershipRole?,
 )
+
+/**
+ * Request body for
+ * `PATCH /api/v1/tenants/{slug}/memberships/{membershipId}`
+ * (Phase 3J.N). Only `role` is mutable on an existing membership
+ * via this endpoint — status transitions use the dedicated
+ * DELETE / (future) reinstate endpoints.
+ */
+data class UpdateMembershipRoleRequest(
+    @field:NotNull
+    val role: MembershipRole?,
+)

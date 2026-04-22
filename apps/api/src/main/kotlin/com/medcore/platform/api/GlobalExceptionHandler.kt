@@ -1,5 +1,6 @@
 package com.medcore.platform.api
 
+import com.medcore.platform.write.WriteConflictException
 import com.medcore.platform.write.WriteValidationException
 import com.medcore.tenancy.context.TenantContextMissingException
 import jakarta.persistence.EntityNotFoundException
@@ -225,6 +226,28 @@ class GlobalExceptionHandler {
     }
 
     // --- 409 Conflict ---
+
+    /**
+     * Phase 3J.N: [WriteConflictException] maps to 409
+     * `resource.conflict` with a structured `details.reason`
+     * carrying the handler's short slug. Used by aggregate-state
+     * invariants (e.g., `LastOwnerInvariant` refusing to demote
+     * the last active OWNER of a tenant). Distinct from the
+     * optimistic-lock / unique-constraint paths below — those
+     * are DB-layer; this is app-layer enforcement of a
+     * multi-row invariant inside the gate's transaction.
+     */
+    @ExceptionHandler(WriteConflictException::class)
+    fun onWriteConflict(
+        ex: WriteConflictException,
+    ): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(
+            ErrorResponses.of(
+                code = ErrorCodes.RESOURCE_CONFLICT,
+                message = "The request conflicts with the current state of the resource.",
+                details = mapOf("reason" to ex.code),
+            ),
+        )
 
     @ExceptionHandler(OptimisticLockingFailureException::class, ObjectOptimisticLockingFailureException::class)
     fun onOptimisticLock(

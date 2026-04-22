@@ -957,20 +957,26 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | `WriteResponse` envelope extensibility (typed fields only, no `Any`-map) | 3J.1 | **3J.N or 4A** (first caller that needs metadata) |
 | `AuthorityResolver` caching strategy ADR | 3J.1 | **4A+** (when traffic shape warrants) |
 | `WriteContext.idempotencyKey` dedupe persistence + replay semantics | 3J.1 | **4A** (patient-create) / **6A** (Stripe webhooks) |
-| V13+ SECURITY DEFINER `tenancy.resolve_authority(slug, uid)` to close RLS-collapsed `MEMBERSHIP_SUSPENDED` | 3J.2 | **3J.N** (next natural schema slice) |
+| V13+ SECURITY DEFINER admin-read helper (partial close — `caller_is_tenant_admin` shipped in V13; broader `resolve_authority` deferred) | 3J.2 | partial **3J.N** (V13) + remainder carried for Phase 4A if broader resolver needed |
+| MEMBERSHIP_SUSPENDED → NOT_A_MEMBER collapse at tenant-SELECT layer (V8's tenant policy, distinct from V13's membership expansion) | 3J.2 | **Phase 4A+** (when caller-suspended visibility matters for clinical surfaces) |
 | Audit payload column / structured mutation diff (before/after) | 3J.2 | **Phase 7** (compliance-driven ADR) |
 | `If-Match` precondition header on PATCH | 3J.2 | **3J.N or 3L** (when a client demands it) |
 | ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I** (CI substrate lands) |
 | `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A** (first PHI write) |
-| `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint | 3J.3 | **3J.N** (next tenancy write) |
-| `DELETE /memberships/{id}` member-removal endpoint | 3J.3 | **3J.N** (pairs with role-update) |
+| `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint | 3J.3 | **3J.N** (closed) |
+| `DELETE /memberships/{id}` member-removal endpoint | 3J.3 | **3J.N** (closed) |
 | Custom JSON deserialiser for `MembershipRole` that maps invalid values to 422 (not 400) | 3J.3 | future minor hardening slice |
 | `actor_role` snapshot column on `audit.audit_event` — capture caller's role at audit time to avoid historical-join drift on `tenant_membership` role changes | 3J.3 | **Phase 7** (bundled with the audit-payload-diff schema evolution ADR) |
+| Deferred CHECK trigger at commit time for last-OWNER invariant (closes phantom-INSERT window of pessimistic-lock approach) | 3J.N | **Phase 7 or earlier** if needed |
+| Structured `from_role`/`to_role` audit columns for membership role changes (currently encoded in `reason` as closed-enum tokens) | 3J.N | **Phase 7** (audit-schema-evolution ADR) |
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.3 membership-invite slice;
-three new 3J.3-opened carry-forward rows added — role-update +
-member-removal + MembershipRole invalid-value 422 hardening).
+*Last reviewed: 2026-04-22 (Phase 3J.N membership role-update +
+revocation slice — closes 2 of the 3 3J.3-opened carry-forwards
+and partially closes the 3J.2 SECURITY DEFINER resolver; adds
+2 new 3J.N-opened rows for deferred-trigger + structured audit
+columns; splits the SUSPENDED-collapse carry-forward to clarify
+the tenant-layer portion remains open).
 Next review: 2026-07-22 (quarterly). Review cadence aligned with
 competitive-landscape review cadence.*

@@ -53,4 +53,37 @@ class TenantWriteConfig {
             validator = validator,
             txHook = tenancyRlsTxHook,
         )
+
+    @Bean
+    fun updateTenantMembershipRoleGate(
+        policy: UpdateTenantMembershipRolePolicy,
+        auditor: UpdateTenantMembershipRoleAuditor,
+        validator: UpdateTenantMembershipRoleValidator,
+        txManager: PlatformTransactionManager,
+        tenancyRlsTxHook: TenancyRlsTxHook,
+    ): WriteGate<UpdateTenantMembershipRoleCommand, RoleUpdateSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = validator,
+            txHook = tenancyRlsTxHook,
+        )
+
+    @Bean
+    fun revokeTenantMembershipGate(
+        policy: RevokeTenantMembershipPolicy,
+        auditor: RevokeTenantMembershipAuditor,
+        txManager: PlatformTransactionManager,
+        tenancyRlsTxHook: TenancyRlsTxHook,
+    ): WriteGate<RevokeTenantMembershipCommand, RevokeSnapshot> =
+        // No validator — revoke has no body, and the path variable's
+        // UUID format is enforced by @PathVariable binding.
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = null,
+            txHook = tenancyRlsTxHook,
+        )
 }

@@ -33,6 +33,7 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     // --- Membership authorities ---
     MEMBERSHIP_READ("MEDCORE_MEMBERSHIP_READ"),
     MEMBERSHIP_INVITE("MEDCORE_MEMBERSHIP_INVITE"),
+    MEMBERSHIP_ROLE_UPDATE("MEDCORE_MEMBERSHIP_ROLE_UPDATE"),
     MEMBERSHIP_REMOVE("MEDCORE_MEMBERSHIP_REMOVE"),
 
     // --- System-scope (bootstrap, admin ops) ---
