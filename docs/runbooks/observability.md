@@ -313,11 +313,112 @@ without authorization.
 
 ---
 
+## Audit chain verification (Phase 3F.4)
+
+A scheduled background job invokes `audit.verify_chain()` (V9,
+Phase 3D) periodically to detect tamper in the audit hash chain.
+The job is **detection only** — it never modifies audit data and
+never invokes `audit.rebuild_chain()`.
+
+### Behaviour matrix
+
+| Outcome | Log level | Audit event |
+| ---- | ---- | ---- |
+| Clean chain | DEBUG (prod default) / INFO (dev when verbose-clean-log=true) | none — silence is the right signal |
+| Broken chain | ERROR | `audit.chain.integrity_failed` (one per cycle; reason `breaks:<N>\|reason:<first-code>`) |
+| Verifier infra failure (DB unreachable, function missing, permission denied) | ERROR | `audit.chain.verification_failed` (one per cycle; reason `verifier_failed`) |
+
+### Environment configuration
+
+| Variable | Default | Purpose |
+| ---- | ---- | ---- |
+| `MEDCORE_AUDIT_CHAIN_VERIFICATION_ENABLED` | `true` | Master switch. `false` disables the scheduler entirely. |
+| `MEDCORE_AUDIT_CHAIN_VERIFICATION_CRON` | `0 0 * * * *` (hourly) | Spring `@Scheduled` cron expression, UTC-evaluated. Dev can shorten for fast feedback, e.g. `*/30 * * * * *` (every 30s). Note: Spring does not support a separate initial-delay for cron; first run is at the next matching cron time. |
+| `MEDCORE_AUDIT_CHAIN_VERIFICATION_VERBOSE_CLEAN_LOG` | `false` | When `true`, clean-case verification logs at INFO. Default `false` emits at DEBUG (silent under default production logging). |
+
+### Incident response — `audit.chain.integrity_failed` emitted
+
+This is a **clinical safety incident**. The audit chain is
+cryptographically linked; a break means at least one row was
+modified, deleted, or re-ordered after it was appended. Steps:
+
+1. **Preserve the current state.** Do NOT call `rebuild_chain()`
+   as a first move — the function recomputes hashes based on
+   current row content, which overwrites the forensic evidence of
+   the break.
+2. **Pull forensics.**
+   ```sql
+   -- Full break set for this cycle
+   SELECT sequence_no, reason FROM audit.verify_chain();
+
+   -- Compare stored vs. canonical for each break
+   SELECT sequence_no, row_hash,
+          audit.compute_chain_hash(audit.canonicalize_event(
+              id, recorded_at, tenant_id, actor_type, actor_id,
+              actor_display, action, resource_type, resource_id,
+              outcome, request_id, client_ip, user_agent, reason
+          ), prev_hash) AS recomputed
+     FROM audit.audit_event
+    WHERE sequence_no IN (...breakage sequence numbers...);
+   ```
+3. **Correlate** via `request_id` on all log lines in the window
+   covering the break. Determine who / what had write access to
+   the audit schema (should be nobody — `medcore_app` has
+   `INSERT, SELECT` only, everything else revoked).
+4. **Remediate** only after forensics: invoke
+   `audit.rebuild_chain()` via the migrator role if (and only if)
+   the content is confirmed correct and the hashes need
+   recomputation. Remediation should produce its own audit trail
+   (captured by the migration or ops journal, not by the app).
+
+### Incident response — `audit.chain.verification_failed` emitted
+
+This is an **infrastructure incident**, not a chain-integrity
+incident. Common causes:
+
+- Database connection refused (check connection pool, RDS health).
+- `audit.verify_chain()` function missing (check Flyway history —
+  V9 should be applied).
+- Permission denied on `audit.verify_chain()` (check the grant to
+  `medcore_app` from V9).
+
+If `verification_failed` persists for more than 3 consecutive
+cycles, manually invoke `SELECT audit.verify_chain()` via `psql` as
+`medcore_app` to confirm state before escalating further.
+
+### Deployment constraints — single-instance only
+
+> ⚠️ **This scheduler is safe only in single-instance deployments.**
+> Running Medcore horizontally (multiple pods / ECS tasks sharing
+> one Postgres) will produce **duplicate `integrity_failed` /
+> `verification_failed` audit events** — every instance's scheduler
+> fires on the same cron and each observes the same chain state.
+>
+> Before Medcore ever runs multi-instance, a distributed lock
+> (ShedLock against the shared DB, or equivalent) MUST land. This
+> is tracked as carry-forward. Operators onboarding Medcore should
+> verify the deployment remains single-instance by default
+> (Phase 3I's ECS baseline is single-task). When horizontal
+> scaling is needed, the ADR that introduces it must also land the
+> distributed-lock substrate.
+
+### Operator surface (deferred)
+
+No HTTP endpoint exposes chain status or triggers manual
+verification in 3F.4. That lands in Phase 3J alongside tenancy
+writes + RBAC.
+
+---
+
 ## Carry-forward tracked out of Phase 3F / 3G
 
 - 3F.2: OpenTelemetry SDK + traces/metrics (the `/actuator/prometheus`
   endpoint that is currently 404 lands here).
-- 3F.4: `audit.verify_chain()` scheduled job.
+- 3F.4 close-outs remaining: HTTP operator surface for manual
+  verification / chain-status inspection → Phase 3J (alongside
+  tenancy writes + RBAC).
+- 3F.4: distributed lock for multi-instance deployments (ShedLock
+  or equivalent) → ADR at the point Medcore runs multi-instance.
 - Build-info / git-commit-info Gradle plugin → separate slice when
   useful (makes `/actuator/info` non-empty).
 - 3G: 400 Bad Request responses remain framework-default — explicit

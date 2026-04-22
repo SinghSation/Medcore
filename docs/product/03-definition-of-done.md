@@ -192,9 +192,97 @@ carry-forward item remains open.
       (3F.2), no scheduled audit job (3F.4), no build-info plugin
       (separate slice), no custom HealthIndicator.
 
-#### 3.1.4 Phase 3F.4 — Chain verification scheduled job
+#### 3.1.4 Phase 3F.4 — Audit chain verification scheduled job
 
-<!-- TODO(content): populated when 3F.4 opens. -->
+- [ ] Spring `@Scheduled` job invokes `audit.verify_chain()` (V9,
+      Phase 3D) on a configurable cadence. Default cron:
+      `0 0 * * * *` (top of every hour). First execution fires at
+      the next matching cron time — `@Scheduled` does not support a
+      separate initial-delay for cron triggers; dev shortens the
+      cron via env var for faster feedback.
+- [ ] **Read-only contract** (asserted by
+      `ChainVerifierReadOnlyTest`): verification performs no INSERT,
+      no UPDATE, no DELETE on `audit.audit_event`. Row count,
+      sequence numbers, and row-hashes are byte-identical before
+      and after. Any future edit that breaks this MUST be caught in
+      review.
+- [ ] **Clean outcome:** no audit event emitted. Log at DEBUG
+      (silent under default production logging). Dev overrides
+      `MEDCORE_AUDIT_CHAIN_VERIFICATION_VERBOSE_CLEAN_LOG=true` to
+      see the line at INFO.
+- [ ] **Broken outcome:** exactly ONE `audit.chain.integrity_failed`
+      audit event per cycle (not per break row — a 1000-row broken
+      chain produces ONE event, not 1000). Log at ERROR. Reason
+      slug format: `breaks:<N>|reason:<first-code>` where
+      `<first-code>` is one of the closed V9 reason codes
+      (`sequence_no_null`, `sequence_gap`,
+      `first_row_has_prev_hash`, `prev_hash_mismatch`,
+      `row_hash_mismatch`). No row content, no tenant id, no
+      actor id.
+- [ ] **Verifier-failed outcome** (infra failure, NOT chain
+      breakage): exactly ONE `audit.chain.verification_failed`
+      audit event per cycle with reason slug `verifier_failed`.
+      Log at ERROR. Distinct from `integrity_failed` so a
+      compliance reviewer can distinguish "chain broken" (clinical
+      safety incident) from "we could not check the chain" (infra
+      incident).
+- [ ] **Concurrency guard:** `AtomicBoolean.compareAndSet` prevents
+      overlapping executions if a run takes longer than the cron
+      interval. Overlapping tick is skipped (logged at DEBUG, no
+      audit). Scope: single-instance. Multi-instance deployment
+      will replace this with a distributed lock (ShedLock or
+      equivalent) via ADR when Phase 3I's deployment baseline is
+      multi-instance.
+- [ ] **Failure isolation:** a bug in the scheduler catches any
+      `Throwable` at the outermost layer and logs ERROR without
+      re-throwing. A failed verification does NOT fail application
+      startup, readiness, or any other request. Deliberate
+      departure from ADR-003 §2's "failed audit fails the audited
+      action" — verification is a background observability task,
+      not a user-facing transaction.
+- [ ] **No auto-remediation.** The verifier never calls
+      `audit.rebuild_chain()`. Remediation is an operator concern
+      via the migrator role, never the app.
+- [ ] **No HTTP operator surface.** Manual verification /
+      chain-status endpoint is deferred to Phase 3J alongside
+      tenancy writes and RBAC.
+- [ ] **Environment-aware activation:** default `enabled=true`.
+      Tests disable by default via `application-test` override; the
+      dedicated `ChainVerificationSchedulerTest` opts in via
+      `@TestPropertySource` and drives `runVerification()` directly
+      to bypass cron timing.
+- [ ] `AuditAction.AUDIT_CHAIN_INTEGRITY_FAILED` and
+      `AuditAction.AUDIT_CHAIN_VERIFICATION_FAILED` added.
+      `AuditAction` KDoc carries the ADR-005-style registry
+      discipline note. Adding a future audit action requires the
+      same rigor (schema impact review, at-least-one test,
+      review-pack callout).
+- [ ] `@EnableScheduling` scoped to a dedicated
+      `ChainVerificationScheduleConfig` rather than hoisted to a
+      global platform config (premature hoisting creates a shared
+      concern every future consumer inherits). Hoisting lands when
+      three or more slices demonstrate a consistent need, via ADR.
+- [ ] Tests:
+  - `ChainVerifierTest` — real DB; clean chain returns `Clean`
+    (both empty and populated cases), tampered row returns
+    `Broken` with count ≥ 1 and a known V9 reason code.
+  - `ChainVerificationSchedulerTest` — `@TestConfiguration`
+    substitutes a programmable verifier; asserts all four dispatch
+    paths: clean silent, broken emits ONE `integrity_failed`,
+    verifier-failed emits ONE `verification_failed`, and repeated
+    invocations emit one event per cycle (not per call).
+  - `ChainVerifierReadOnlyTest` — byte-for-byte assertion that
+    `audit.audit_event` is unchanged after verification.
+- [ ] `docs/runbooks/observability.md` updated with the chain
+      verification section, including the clean/broken/failed
+      behaviour table, env-var overrides, and incident response
+      guidance (manual `rebuild_chain()` is migrator-role only,
+      never the app).
+- [ ] `docs/security/phi-exposure-review-3f-4.md` landed.
+- [ ] Carry-forward closed: "chain verification scheduled job"
+      (3D → 3F.4). Operator surface remains deferred to 3J.
+- [ ] Existing 147/147 tests still green; +8 new tests (3 + 4 + 1)
+      across 3 new suites.
 
 ### 3.2 Phase 3G — Error standardization
 

@@ -79,6 +79,27 @@ medcore:
     audience: ${MEDCORE_OIDC_AUDIENCE:}
     clock-skew: ${MEDCORE_OIDC_CLOCK_SKEW:30s}
 
+  audit:
+    # Phase 3F.4 — scheduled audit-chain integrity verification.
+    # Invokes `audit.verify_chain()` (V9, Phase 3D) periodically.
+    # Detection only: on break, logs ERROR and emits the audit event
+    # `audit.chain.integrity_failed`. On verifier infra failure
+    # (DB unreachable, permission denied), emits
+    # `audit.chain.verification_failed`. Never calls
+    # `audit.rebuild_chain()` — remediation is an operator/migrator
+    # concern, not an application one.
+    #
+    # Defaults are production-safe: enabled by default, hourly
+    # cadence, 5-minute start delay to skip cold-start noise,
+    # clean-case logs silent (DEBUG). Dev environments override
+    # `initial-delay` to 60 and `verbose-clean-log` to true for
+    # faster feedback. Test environments disable the scheduler and
+    # drive verification directly.
+    chain-verification:
+      enabled: ${MEDCORE_AUDIT_CHAIN_VERIFICATION_ENABLED:true}
+      cron: ${MEDCORE_AUDIT_CHAIN_VERIFICATION_CRON:0 0 * * * *}
+      verbose-clean-log: ${MEDCORE_AUDIT_CHAIN_VERIFICATION_VERBOSE_CLEAN_LOG:false}
+
   observability:
     # Phase 3F.1 — request-id + structured logging substrate.
     # Defaults are production-safe: inbound X-Request-Id is accepted
