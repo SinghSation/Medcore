@@ -10,16 +10,22 @@ import com.medcore.platform.write.WriteResponse
 import com.medcore.tenancy.service.MembershipDetail
 import com.medcore.tenancy.service.TenancyService
 import com.medcore.tenancy.service.TenantMembershipResult
+import com.medcore.tenancy.write.InviteTenantMembershipCommand
+import com.medcore.tenancy.write.InviteTenantMembershipHandler
+import com.medcore.tenancy.write.MembershipSnapshot
 import com.medcore.tenancy.write.TenantSnapshot
 import com.medcore.tenancy.write.UpdateTenantDisplayNameCommand
 import com.medcore.tenancy.write.UpdateTenantDisplayNameHandler
 import jakarta.validation.Valid
 import org.slf4j.MDC
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
@@ -44,6 +50,8 @@ class TenantsController(
     private val tenancyService: TenancyService,
     private val updateTenantDisplayNameGate: WriteGate<UpdateTenantDisplayNameCommand, TenantSnapshot>,
     private val updateTenantDisplayNameHandler: UpdateTenantDisplayNameHandler,
+    private val inviteTenantMembershipGate: WriteGate<InviteTenantMembershipCommand, MembershipSnapshot>,
+    private val inviteTenantMembershipHandler: InviteTenantMembershipHandler,
 ) {
 
     @GetMapping(produces = [MediaType.APPLICATION_JSON_VALUE])
@@ -112,6 +120,53 @@ class TenantsController(
             data = TenantSummaryResponse.from(snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
+    }
+
+    /**
+     * Membership invite (Phase 3J.3, ADR-007 §4.9). Second concrete
+     * write through the WriteGate substrate. OWNER / ADMIN creates
+     * an ACTIVE membership for an already-provisioned user;
+     * ADMIN-invites-OWNER is forbidden (policy guard).
+     *
+     * **`Idempotency-Key` header is currently shape-only.** Accepted
+     * and propagated into `WriteContext.idempotencyKey` but NOT
+     * used to dedupe retries. Duplicate submissions produce the
+     * standard 409 via the V6 `uq_tenancy_membership_tenant_user`
+     * constraint. True idempotent-retry semantics arrive alongside
+     * Phase 4A's patient-create flow; client implementations should
+     * NOT assume retry-safe behaviour on this endpoint yet.
+     */
+    @PostMapping(
+        "/{slug}/memberships",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun inviteMembership(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @Valid @RequestBody body: InviteMembershipRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<WriteResponse<MembershipResponse>> {
+        val command = InviteTenantMembershipCommand(
+            slug = slug,
+            // `!!` codifies the @Valid @NotNull guarantee. If this
+            // line runs, Spring has already rejected null bodies
+            // with 422 via MethodArgumentNotValidException.
+            userId = body.userId!!,
+            role = body.role!!,
+        )
+        val context = WriteContext(
+            principal = principal,
+            idempotencyKey = idempotencyKey,
+        )
+        val snapshot = inviteTenantMembershipGate.apply(command, context) { cmd ->
+            inviteTenantMembershipHandler.handle(cmd)
+        }
+        val responseBody = WriteResponse(
+            data = MembershipResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.status(HttpStatus.CREATED).body(responseBody)
     }
 
     private fun MembershipDetail.isVisibleOnList(): Boolean =

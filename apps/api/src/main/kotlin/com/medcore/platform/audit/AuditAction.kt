@@ -79,6 +79,28 @@ enum class AuditAction(val code: String) {
      * no-ops persist nothing.
      */
     TENANCY_TENANT_UPDATED("tenancy.tenant.updated"),
+
+    // --- Phase 3J.3: membership invite ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/memberships` when an
+     * OWNER/ADMIN creates an ACTIVE membership for an existing
+     * user (Phase 3J.3, ADR-007 §4.9).
+     *
+     * Normative audit-row shape contract is defined on
+     * [com.medcore.tenancy.write.InviteTenantMembershipAuditor] —
+     * successes and denials are queried by the
+     * (`resource_type`, `outcome`) pair, NOT by `resource_id`
+     * alone (the `resource_id` column carries different values
+     * across outcome by design; see that KDoc for the canonical
+     * shape + query examples).
+     *
+     * Naming: "invited" matches the `MEMBERSHIP_INVITE` authority
+     * semantics. Phase 3J.3 is direct ACTIVE creation — email-token
+     * invitation flows (PENDING lifecycle) land in a later slice
+     * with their own action.
+     */
+    TENANCY_MEMBERSHIP_INVITED("tenancy.membership.invited"),
 }
 
 /**

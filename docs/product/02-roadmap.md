@@ -962,10 +962,15 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | `If-Match` precondition header on PATCH | 3J.2 | **3J.N or 3L** (when a client demands it) |
 | ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I** (CI substrate lands) |
 | `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A** (first PHI write) |
+| `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint | 3J.3 | **3J.N** (next tenancy write) |
+| `DELETE /memberships/{id}` member-removal endpoint | 3J.3 | **3J.N** (pairs with role-update) |
+| Custom JSON deserialiser for `MembershipRole` that maps invalid values to 422 (not 400) | 3J.3 | future minor hardening slice |
+| `actor_role` snapshot column on `audit.audit_event` — capture caller's role at audit time to avoid historical-join drift on `tenant_membership` role changes | 3J.3 | **Phase 7** (bundled with the audit-payload-diff schema evolution ADR) |
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.2 first-endpoint slice;
-five new 3J.2-opened carry-forward rows added). Next review:
-2026-07-22 (quarterly). Review cadence aligned with
+*Last reviewed: 2026-04-22 (Phase 3J.3 membership-invite slice;
+three new 3J.3-opened carry-forward rows added — role-update +
+member-removal + MembershipRole invalid-value 422 hardening).
+Next review: 2026-07-22 (quarterly). Review cadence aligned with
 competitive-landscape review cadence.*

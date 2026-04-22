@@ -834,7 +834,133 @@ slices.
   - `PhiRlsTxHook` sibling that additionally sets
     `app.current_tenant_id` — Phase 4A.
 
-#### 3.4.3 Phase 3J.3+ — Remaining tenancy writes
+#### 3.4.3 Phase 3J.3 — Membership invite through WriteGate
+
+Second concrete command through the 3J.1 framework. Expands the
+RBAC surface to real multi-user workflows:
+`POST /api/v1/tenants/{slug}/memberships` creates an ACTIVE
+membership for an already-provisioned user. Email-token
+invitation flow (PENDING lifecycle) remains deferred.
+
+- [ ] `POST /api/v1/tenants/{slug}/memberships` implemented on
+      `TenantsController`; body `{userId, role}`; success returns
+      `201 Created` with `WriteResponse<MembershipResponse>`.
+- [ ] Command / policy / validator / handler / auditor / snapshot
+      stack in `com.medcore.tenancy.write`. Pattern identical to
+      3J.2's UpdateTenantDisplayName stack — second
+      instantiation of the reusable layout.
+- [ ] `InviteMembershipRequest` DTO in `com.medcore.tenancy.api`;
+      `userId: UUID?` + `role: MembershipRole?` both `@NotNull`.
+      Missing fields land on 422 via the 3G envelope.
+- [ ] `MembershipResponse.from(snapshot)` factory added;
+      post-write body shape matches the existing read-side
+      `MembershipResponse`.
+- [ ] Policy enforces `MedcoreAuthority.MEMBERSHIP_INVITE`
+      (OWNER + ADMIN) + **ADR-007 §4.9 privilege-escalation
+      guard**: `role == OWNER` additionally requires the
+      caller hold `MedcoreAuthority.TENANT_DELETE`
+      (OWNER-only authority). ADMIN trying to invite OWNER
+      fires `denial:insufficient_authority` — identical wire
+      signal to "MEMBER tried to invite," distinguishable
+      only through the recorded actor role in
+      `tenant_membership` at the audited timestamp.
+- [ ] **Target user existence** verified in the handler via
+      `identityUserRepository.existsById`. Missing user
+      surfaces as 422 `{field:"userId", code:"user_not_found"}`
+      via `WriteValidationException`, NOT 404. Avoids leaking
+      user-existence to authenticated admins.
+- [ ] **No app-layer duplicate-check.** The V6
+      `uq_tenancy_membership_tenant_user UNIQUE (tenant_id,
+      user_id)` constraint is the authoritative guard — race-safe
+      under concurrent writes. SQLSTATE 23505 → 409
+      `resource.conflict` via the existing 3G mapping.
+- [ ] `AuditAction.TENANCY_MEMBERSHIP_INVITED` registry entry
+      (`tenancy.membership.invited`). Registry discipline
+      (ADR-005 §2.3, ADR-007 §2.5) applied: enum entry + test
+      emission + KDoc + review-pack callout.
+- [ ] **Structured target-user capture on denial audit** (§9.4
+      pressure-test decision, ADR-007 §4.9). Denial row uses
+      `resource_type = "tenant_membership"`,
+      `resource_id = <target user UUID>` — the only column-level
+      structured identifier available when `tenant_id` is null
+      (enumeration protection). Compliance queries are
+      column-based, not `reason` string-parsed.
+- [ ] Audit success row: `action=tenancy.membership.invited`,
+      `reason=intent:tenancy.membership.invite`,
+      `resource_type=tenant_membership`,
+      `resource_id=<new membership UUID>`,
+      `tenant_id=<tenant UUID>`, `outcome=SUCCESS`.
+- [ ] Audit denial row: `action=authz.write.denied`,
+      `reason=intent:tenancy.membership.invite|denial:<code>`,
+      `resource_type=tenant_membership`,
+      `resource_id=<target user UUID>`, `tenant_id=null`,
+      `outcome=DENIED`.
+- [ ] Unknown slug returns 403 + `denial:not_a_member`
+      (enumeration protection inherited from 3J.2).
+- [ ] Suspended tenant returns 403 + `denial:tenant_suspended`
+      even for an OWNER (TENANT_SUSPENDED resolves correctly
+      in the sealed `AuthorityResolution.Denied` path).
+- [ ] Suspended membership collapses to `denial:not_a_member`
+      due to the known 3J.2 RLS read-policy limitation (V13+
+      carry-forward closes this for both 3J.2 and 3J.3 at
+      once).
+- [ ] Self-invite explicitly allowed at the policy layer (caller
+      already holds `MEMBERSHIP_INVITE`); the V6 unique
+      constraint refuses → 409 (same path as any duplicate).
+      `self-invite when caller is already member — 409` asserts
+      the behaviour.
+- [ ] **`Idempotency-Key` header is shape-only and explicitly
+      non-functional in 3J.3.** Accepted and propagated into
+      `WriteContext.idempotencyKey`; NOT used to dedupe retries.
+      Controller method KDoc states "clients should NOT assume
+      retry-safe behaviour on this endpoint yet." Dedupe
+      semantics land alongside Phase 4A's patient-create flow.
+- [ ] `requestId` parity: response-body `requestId` equals
+      response-header `X-Request-Id`. Asserted in integration
+      test.
+- [ ] `docs/security/phi-exposure-review-3j-3.md` landed.
+      Risk: None (tenant metadata; no clinical path).
+- [ ] Tests:
+  - `InviteTenantMembershipValidatorTest` (5): happy path,
+    blank slug, malformed slug, OWNER role accepted at
+    validator layer (policy enforces escalation guard), ADMIN
+    role accepted at validator layer.
+  - `InviteTenantMembershipIntegrationTest` (17): 401 unauth;
+    OWNER invites MEMBER 201 + audit; OWNER invites ADMIN 201;
+    OWNER invites OWNER 201; ADMIN invites MEMBER 201; ADMIN
+    invites ADMIN 201; **ADMIN invites OWNER 403 +
+    denial=insufficient_authority**; MEMBER invites 403;
+    non-member invites 403 + denial=not_a_member; suspended
+    tenant 403 + denial=tenant_suspended; unknown slug 403 +
+    denial=not_a_member; non-existent target user 422
+    user_not_found; duplicate membership 409; self-invite
+    409; missing userId 422; missing role 422; requestId
+    parity; Idempotency-Key passthrough.
+- [ ] Existing 242 tests still green; total after 3J.3:
+      **265/265 across 51 suites (+23)**.
+- [ ] Carry-forward closed in 3J.3:
+  - First membership-invite endpoint (3J.1 initial ledger
+    item "POST /api/v1/tenants/{slug}/memberships" / 3J.2
+    inherited "Remaining tenancy write endpoints")
+- [ ] Carry-forward inherited from 3J.2 (unchanged by 3J.3):
+  - V13+ SECURITY DEFINER resolver to close
+    MEMBERSHIP_SUSPENDED → NOT_A_MEMBER collapse (applies to
+    both endpoints)
+  - Audit payload column / structured mutation diff
+  - ArchUnit WriteGate-exclusivity rule → 3I
+  - PhiRlsTxHook sibling → 4A
+- [ ] Carry-forward opened by 3J.3:
+  - MEMBERSHIP_ROLE_UPDATE authority + endpoint (promote /
+    demote) → 3J.N — the next natural tenancy write slice
+  - Member removal endpoint (`DELETE /memberships/{id}`) →
+    3J.N — pairs naturally with role-update
+  - Idempotency-Key functional dedupe — still carry-forward
+    to 4A; confirmed shape-only for 3J.3
+  - Custom JSON deserialiser for `MembershipRole` that
+    returns 422 on invalid enum (currently 400 via Jackson)
+    → minor hardening slice
+
+#### 3.4.4 Phase 3J.4+ — Remaining tenancy writes
 
 <!-- TODO(content): populated as each endpoint slice opens. Each
      slice's DoD row MUST assert: WriteGate is the only mutation
@@ -868,7 +994,7 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3J.2 DoD populated alongside the
-first endpoint slice; §3.4.2 expanded with the full 3J.2 exit bar).
-Next review: 2026-05-22, or on the next phase opening (whichever
-is sooner).*
+*Last reviewed: 2026-04-22 (Phase 3J.3 DoD populated — second
+concrete WriteGate endpoint; §3.4.3 membership-invite row added
+with the ADR-007 §4.9 escalation-guard discipline). Next review:
+2026-05-22, or on the next phase opening (whichever is sooner).*

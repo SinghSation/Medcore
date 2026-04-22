@@ -37,4 +37,20 @@ class TenantWriteConfig {
             validator = validator,
             txHook = tenancyRlsTxHook,
         )
+
+    @Bean
+    fun inviteTenantMembershipGate(
+        policy: InviteTenantMembershipPolicy,
+        auditor: InviteTenantMembershipAuditor,
+        validator: InviteTenantMembershipValidator,
+        txManager: PlatformTransactionManager,
+        tenancyRlsTxHook: TenancyRlsTxHook,
+    ): WriteGate<InviteTenantMembershipCommand, MembershipSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = validator,
+            txHook = tenancyRlsTxHook,
+        )
 }

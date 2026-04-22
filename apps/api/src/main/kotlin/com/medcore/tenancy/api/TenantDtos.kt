@@ -4,9 +4,12 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.platform.tenancy.MembershipRole
 import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.TenantStatus
+import com.medcore.tenancy.write.MembershipSnapshot
 import com.medcore.tenancy.write.TenantSnapshot
 import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Size
+import java.util.UUID
 
 /**
  * Wire shapes for the tenancy read surface. Mirrors
@@ -77,9 +80,53 @@ data class MembershipResponse(
     val role: MembershipRole,
     val status: MembershipStatus,
     val tenant: TenantSummaryResponse,
-)
+) {
+    companion object {
+        /**
+         * Adapts the write-path [MembershipSnapshot] (Phase 3J.3) to
+         * the outbound wire shape. Same shape the read-path produces
+         * so clients see one `MembershipResponse` regardless of
+         * whether the response came from a GET or a POST.
+         */
+        fun from(snapshot: MembershipSnapshot): MembershipResponse =
+            MembershipResponse(
+                membershipId = snapshot.id.toString(),
+                userId = snapshot.userId.toString(),
+                role = snapshot.role,
+                status = snapshot.status,
+                tenant = TenantSummaryResponse(
+                    id = snapshot.tenantId.toString(),
+                    slug = snapshot.tenantSlug,
+                    displayName = snapshot.tenantDisplayName,
+                    status = snapshot.tenantStatus,
+                ),
+            )
+    }
+}
 
 @JsonInclude(JsonInclude.Include.ALWAYS)
 data class MembershipListResponse(
     val items: List<MembershipResponse>,
+)
+
+/**
+ * Request body for `POST /api/v1/tenants/{slug}/memberships`
+ * (Phase 3J.3).
+ *
+ * Both fields nullable on the wire shape so missing fields are
+ * caught by `@NotNull` → 422 (same 3G envelope), not Jackson's
+ * deferred 400 path. By the time the controller reads the values,
+ * Spring's `@Valid` has guaranteed they are non-null.
+ *
+ * [role] is deserialised from a JSON string into the
+ * [MembershipRole] enum; invalid values produce a Jackson
+ * deserialisation failure → 400 (Phase 3G non-normalised path).
+ * A follow-on slice may tighten this via a custom deserialiser
+ * that returns 422; tracked as a carry-forward.
+ */
+data class InviteMembershipRequest(
+    @field:NotNull
+    val userId: UUID?,
+    @field:NotNull
+    val role: MembershipRole?,
 )
