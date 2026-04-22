@@ -1,5 +1,7 @@
 package com.medcore.platform.audit
 
+import io.micrometer.observation.ObservationRegistry
+import io.micrometer.observation.annotation.Observed
 import java.sql.PreparedStatement
 import java.sql.Timestamp
 import java.sql.Types
@@ -49,14 +51,73 @@ class JdbcAuditWriter(
     transactionManager: PlatformTransactionManager,
     private val requestMetadataProvider: RequestMetadataProvider,
     private val clock: Clock,
+    private val observationRegistry: ObservationRegistry,
 ) : AuditWriter {
 
     private val transactionTemplate: TransactionTemplate = TransactionTemplate(transactionManager)
 
+    /**
+     * Writes an audit row through `audit.append_event(...)`.
+     *
+     * **Observation surface (Phase 3F.2).** This method is wrapped in a
+     * Medcore-custom observation named `medcore.audit.write` that
+     * produces both a timer metric (latency histogram tagged by
+     * action + outcome) and a span visible in OpenTelemetry trace
+     * backends. The only attributes added are:
+     *
+     *   - `medcore.audit.action`  — the action enum's closed-set
+     *                                wire code (e.g. `identity.user.login.success`)
+     *   - `medcore.audit.outcome` — SUCCESS / DENIED / ERROR
+     *
+     * **⚠️ PHI GUARDRAIL — READ BEFORE MODIFYING.** Under no
+     * circumstance may future code add any of the following as span
+     * attributes, tags, or baggage on this observation:
+     *
+     *   - Actor IDs (`actor_id`), tenant IDs (`tenant_id`), resource
+     *     IDs (`resource_id`).
+     *   - Actor display name, email, preferred username.
+     *   - The `reason` string's content.
+     *   - Any column value of the audit row being appended.
+     *   - Any representation of the `AuditEventCommand` payload.
+     *
+     * Those fields live in the `audit.audit_event` table (access-
+     * controlled via grants) and in MDC (request-scoped, cleared
+     * on request exit). They do NOT belong in span attributes
+     * because span backends often have weaker access controls than
+     * the audit DB, and spans may be sampled-out — creating a
+     * disclosure path that varies by sampling rate.
+     *
+     * The allow-list in
+     * [com.medcore.platform.observability.ObservationAttributeFilterConfig]
+     * enforces this by stripping any `medcore.*` attribute not on
+     * `MEDCORE_CUSTOM_ALLOW_PATTERNS`. This KDoc is the developer-
+     * facing contract; the filter is the runtime backstop.
+     * `TracingPhiLeakageTest` asserts both.
+     */
+    @Observed(
+        name = "medcore.audit.write",
+        contextualName = "audit.write",
+    )
     override fun write(command: AuditEventCommand) {
         val metadata = requestMetadataProvider.current()
         val recordedAt = Instant.now(clock)
         val id = UUID.randomUUID()
+
+        // Add the minimal, PHI-safe attributes to the current
+        // observation (created by @Observed). `Observation.tryScoped`
+        // returns the active observation if any — via the
+        // ObservationRegistry — so we do not open a second scope.
+        val currentObservation = observationRegistry.currentObservation
+        if (currentObservation != null) {
+            currentObservation.lowCardinalityKeyValue(
+                "medcore.audit.action",
+                command.action.code,
+            )
+            currentObservation.lowCardinalityKeyValue(
+                "medcore.audit.outcome",
+                command.outcome.name,
+            )
+        }
 
         transactionTemplate.executeWithoutResult {
             // PG JDBC's executeUpdate() rejects SELECT; the function

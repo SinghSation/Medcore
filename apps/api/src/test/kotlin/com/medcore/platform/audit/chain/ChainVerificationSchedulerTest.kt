@@ -166,10 +166,11 @@ class ChainVerificationSchedulerTest {
      * all other beans work as in production).
      */
     class ProgrammableVerifier : ChainVerifier(
-        // JdbcTemplate is never used because verify() is overridden.
-        // Passing a bogus but non-null JdbcTemplate avoids Spring
-        // bean-construction failures.
+        // JdbcTemplate and ObservationRegistry are never used because
+        // verify() is overridden. Passing bogus-but-non-null instances
+        // avoids Spring bean-construction failures.
         jdbcTemplate = org.springframework.jdbc.core.JdbcTemplate(),
+        observationRegistry = io.micrometer.observation.ObservationRegistry.NOOP,
     ) {
         @Volatile
         var nextResult: ChainVerificationResult = ChainVerificationResult.Clean

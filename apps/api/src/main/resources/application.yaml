@@ -120,15 +120,23 @@ medcore:
       trusted-proxies: ${MEDCORE_TRUSTED_PROXIES:}
       forwarded-for-header: ${MEDCORE_FORWARDED_FOR_HEADER:X-Forwarded-For}
 
-# Structured logging (Spring Boot 3.4). ECS = Elastic Common Schema —
-# a well-defined field set supported by Elastic, Datadog, CloudWatch
-# Logs Insights, and most log-aggregation vendors. Operators can
-# override via MEDCORE_LOG_FORMAT if their target platform prefers
-# a different format (logstash, gelf).
+# Logging (Phase 3F.1 structured + Phase 3F.2 trace correlation).
+#
+#  - `structured.format.console=ecs` — default Elastic Common Schema
+#    format for the console appender; operator-overridable via
+#    MEDCORE_LOG_FORMAT.
+#  - `pattern.correlation` — Spring Boot 3.4 adds `traceId` and
+#    `spanId` to MDC automatically when micrometer-tracing-bridge-otel
+#    is on the classpath; this entry ensures the keys flow into the
+#    structured output alongside request_id (Phase 3F.1). Four
+#    correlation surfaces (request_id + trace_id + span_id + user_id /
+#    tenant_id) now appear in every log line.
 logging:
   structured:
     format:
       console: ${MEDCORE_LOG_FORMAT:ecs}
+  pattern:
+    correlation: "[%X{traceId:-},%X{spanId:-}]"
 
 # Spring Boot Actuator (Phase 3F.3). Only `health` and `info` are
 # exposed on the web; every other endpoint (env, metrics, beans,
@@ -145,6 +153,28 @@ logging:
 # unauthenticated caller. The response shape is strictly
 # `{"status":"UP"}` | `{"status":"DOWN"}` | etc.
 management:
+  # Phase 3F.2 — OpenTelemetry traces + metrics.
+  # Export endpoints default to unset (empty). The application
+  # collects spans and metrics in-process via Micrometer; they are
+  # shipped only when an operator points at an OTLP collector.
+  # This posture is production-safe (no accidental phone-home) but
+  # is logged prominently at startup so operators are not misled
+  # into assuming traces exist when they do not. See
+  # ObservabilityStartupReporter + TelemetryExportInfoContributor.
+  #
+  # Sampling probability defaults to 0.1 (prod-safe); dev overrides
+  # to 1.0 via env var. Operators MUST raise to 1.0 for the
+  # duration of an active incident investigation — see runbook.
+  tracing:
+    sampling:
+      probability: ${MEDCORE_TRACING_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${MEDCORE_OTLP_TRACING_ENDPOINT:}
+    metrics:
+      export:
+        url: ${MEDCORE_OTLP_METRICS_URL:}
+        step: ${MEDCORE_OTLP_METRICS_STEP:1m}
   endpoints:
     web:
       exposure:

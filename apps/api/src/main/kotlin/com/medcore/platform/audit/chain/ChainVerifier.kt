@@ -1,5 +1,7 @@
 package com.medcore.platform.audit.chain
 
+import io.micrometer.observation.ObservationRegistry
+import io.micrometer.observation.annotation.Observed
 import java.sql.SQLException
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Service
@@ -40,7 +42,10 @@ import org.springframework.stereotype.Service
  *     distinct from chain-integrity failures.
  */
 @Service
-open class ChainVerifier(private val jdbcTemplate: JdbcTemplate) {
+open class ChainVerifier(
+    private val jdbcTemplate: JdbcTemplate,
+    private val observationRegistry: ObservationRegistry,
+) {
 
     /**
      * Open for a narrow test-only override in
@@ -50,8 +55,41 @@ open class ChainVerifier(private val jdbcTemplate: JdbcTemplate) {
      * code MUST NOT subclass this or replace the default
      * implementation; the `@TestConfiguration` in the test file is
      * the only permitted alternate.
+     *
+     * **Observation surface (Phase 3F.2).** Wrapped in a custom
+     * Micrometer observation named `medcore.audit.chain.verify`
+     * that produces a timer metric + a span. The only attribute
+     * added is:
+     *   - `medcore.audit.chain.outcome` — `clean` / `broken` /
+     *     `verifier_failed`
+     *
+     * No break count, no reason code content, no exception message
+     * appear on the observation — those live on the scheduler's
+     * log line and audit event, not on the span. The allow-list in
+     * `ObservationAttributeFilterConfig` enforces this at runtime.
      */
-    open fun verify(): ChainVerificationResult =
+    @Observed(
+        name = "medcore.audit.chain.verify",
+        contextualName = "audit.chain.verify",
+    )
+    open fun verify(): ChainVerificationResult {
+        val result = runVerification()
+        val currentObservation = observationRegistry.currentObservation
+        if (currentObservation != null) {
+            val outcomeTag = when (result) {
+                is ChainVerificationResult.Clean -> "clean"
+                is ChainVerificationResult.Broken -> "broken"
+                is ChainVerificationResult.VerifierFailed -> "verifier_failed"
+            }
+            currentObservation.lowCardinalityKeyValue(
+                "medcore.audit.chain.outcome",
+                outcomeTag,
+            )
+        }
+        return result
+    }
+
+    private fun runVerification(): ChainVerificationResult =
         try {
             val breaks: List<String> = jdbcTemplate.query(
                 "SELECT reason FROM audit.verify_chain()",

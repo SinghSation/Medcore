@@ -135,9 +135,101 @@ carry-forward item remains open.
       `MdcUserIdFilter`, end-to-end correlation, PHI-leakage, and
       filter registration.
 
-#### 3.1.2 Phase 3F.2 — OpenTelemetry traces/metrics
+#### 3.1.2 Phase 3F.2 — OpenTelemetry traces + metrics
 
-<!-- TODO(content): populated when 3F.2 opens. -->
+- [ ] Spring Boot 3.4 Micrometer Observation API bridged to the
+      OpenTelemetry SDK via `micrometer-tracing-bridge-otel`. HTTP
+      server requests and JDBC calls are auto-instrumented — no
+      custom code for those surfaces.
+- [ ] `@Observed(name = "medcore.audit.write")` on
+      `JdbcAuditWriter.write` — timer + span for every audit write,
+      tagged `medcore.audit.action` (closed-enum action code) and
+      `medcore.audit.outcome` (SUCCESS/DENIED/ERROR).
+- [ ] `@Observed(name = "medcore.audit.chain.verify")` on
+      `ChainVerifier.verify` — timer + span tagged
+      `medcore.audit.chain.outcome` (`clean` / `broken` /
+      `verifier_failed`).
+- [ ] `ObservedAspect` bean registered so `@Observed` annotations
+      are honoured (Micrometer does not auto-register the aspect).
+      `org.aspectj:aspectjweaver` on classpath to satisfy the
+      runtime AOP requirement.
+- [ ] **Hybrid attribute filter** (`ObservationAttributeFilterConfig`)
+      in place:
+      - Auto-instrumented observations: deny-list strips
+        `http.request.header.*`, `http.response.header.*`,
+        `http.request.query.*`, `sql.parameters`,
+        `db.statement.parameters`, `http.request.body`,
+        `http.response.body`, `patient.*`, `user.email`,
+        `user.name`, `user.display_name`.
+      - Medcore-custom observations (names starting with
+        `medcore.`): **allow-list** — only `medcore.audit.action`,
+        `medcore.audit.outcome`, `medcore.audit.chain.outcome`, and
+        standard OTel keys (`otel.*`, `error`, `exception.*`,
+        `code.*`, `class`, `method`). Any other key is stripped.
+      - `TracingPhiLeakageTest` asserts both at runtime.
+- [ ] **KDoc guardrail** on `JdbcAuditWriter.write` names the
+      prohibited span attributes (actor IDs, tenant IDs, resource
+      IDs, display names, emails, reason content, row content,
+      command payload) and points at the filter as the runtime
+      backstop.
+- [ ] OTLP exporters ship with the build but default to **unset**
+      (`management.otlp.tracing.endpoint` and
+      `management.otlp.metrics.export.url` both empty). Operators
+      opt in by setting `MEDCORE_OTLP_TRACING_ENDPOINT` and/or
+      `MEDCORE_OTLP_METRICS_URL`.
+- [ ] **Startup visibility:** `ObservabilityStartupReporter` logs
+      at INFO on `ApplicationReadyEvent` the state of trace export
+      and metric export (endpoint or `"disabled"`). When BOTH are
+      unset, logs a WARN line making clear that nothing ships.
+- [ ] **`/actuator/info` signal:** `TelemetryExportInfoContributor`
+      exposes `telemetry.traces.enabled`, `telemetry.traces.endpoint`,
+      `telemetry.metrics.enabled`, `telemetry.metrics.endpoint`, and
+      `telemetry.traces.samplingProbability` under the `info`
+      actuator response.
+- [ ] **Sampling default 0.1** (prod-safe) in `application.yaml`.
+      Dev overrides to 1.0 via
+      `MEDCORE_TRACING_SAMPLING_PROBABILITY=1.0`. Runbook documents
+      **incident-response escalation**: operators MUST raise to 1.0
+      for the duration of any active incident investigation.
+- [ ] **Log-trace correlation:** every structured log line carries
+      `trace_id` and `span_id` in addition to the 3F.1 fields
+      (`request_id`, `user_id`, `tenant_id`). Spring Boot 3.4
+      adds them automatically when micrometer-tracing is on the
+      classpath; `logging.pattern.correlation` ensures they flow
+      into the structured JSON. **Runbook clarifies that
+      `request_id` (internal correlation) and `trace_id`
+      (distributed correlation) are distinct and complementary.**
+- [ ] **No Prometheus scrape endpoint** in 3F.2 (explicit
+      non-goal — avoids the actuator-auth question). OTLP push is
+      the exclusive export channel. Future need for Prometheus
+      lands in a dedicated slice with an auth strategy.
+- [ ] `ProgrammableVerifier` test harness in
+      `ChainVerificationSchedulerTest` updated for the added
+      `ObservationRegistry` constructor parameter (uses
+      `ObservationRegistry.NOOP`).
+- [ ] Tests:
+  - `TracingConfigIntegrationTest` (7): context loads, Observation-
+    Registry/Tracer/MeterRegistry/ObservedAspect all present,
+    sampling default 0.1, OTLP endpoints unset.
+  - `AuditWriteObservationTest` (1): real /api/v1/me drives ≥ 2
+    audit writes; `medcore.audit.write` timer count increments;
+    tag keys are allow-list subset.
+  - `ChainVerifyObservationTest` (2): chain verify increments
+    timer; outcome tag values in closed set.
+  - `TracingPhiLeakageTest` (2): no `medcore.*` meter carries keys
+    outside the allow list; no tag values match obvious PHI
+    shapes (email, SSN, bearer, date).
+- [ ] PHI-exposure review landed: `docs/security/phi-exposure-review-3f-2.md`.
+- [ ] Runbook updated: `docs/runbooks/observability.md` gains the
+      "OpenTelemetry traces and metrics (Phase 3F.2)" section
+      with: auto-instrumentation scope, custom observation names,
+      sampling defaults + incident escalation, OTLP configuration,
+      request_id vs trace_id clarification, startup-log format,
+      `/actuator/info` telemetry block shape.
+- [ ] Phase 3F closes: all four sub-slices (3F.1 + 3F.2 + 3F.3 +
+      3F.4) are complete.
+- [ ] Existing 155/155 tests still green; +12 new tests (7 + 1 +
+      2 + 2) across 4 new suites. Total: 167/167 across 39 suites.
 
 #### 3.1.3 Phase 3F.3 — Health and readiness probes
 

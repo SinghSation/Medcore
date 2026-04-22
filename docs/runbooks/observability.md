@@ -410,15 +410,178 @@ writes + RBAC.
 
 ---
 
+## OpenTelemetry traces and metrics (Phase 3F.2)
+
+Medcore's observability substrate uses Spring Boot 3.4's first-party
+Micrometer Observation API, bridged to OpenTelemetry. HTTP server
+requests and JDBC calls are **auto-instrumented** — spans + timers
+appear without any code changes on those surfaces. Two internal
+operations carry **custom `@Observed` annotations**:
+
+- `medcore.audit.write` (around `JdbcAuditWriter.write`)
+- `medcore.audit.chain.verify` (around `ChainVerifier.verify`)
+
+### Auto-emitted metrics (Micrometer)
+
+- `http.server.requests` — tagged by method, URI template, status, outcome
+- `jdbc.connections.*`, `hikaricp.connections.*` — DB pool stats
+- `jvm.memory.used`, `jvm.gc.*`, `jvm.threads.*` — runtime metrics
+- `medcore.audit.write` (Medcore-custom) — audit-write latency
+- `medcore.audit.chain.verify` (Medcore-custom) — chain-verify latency
+
+### Export — disabled by default
+
+OTLP endpoints for traces and metrics are **unset** in the default
+configuration. Spans and metrics are collected in-process and are
+visible via the `MeterRegistry` bean at runtime, but nothing is
+shipped to any backend until an operator opts in:
+
+| Variable | Purpose |
+| ---- | ---- |
+| `MEDCORE_OTLP_TRACING_ENDPOINT` | OTLP traces endpoint (e.g., `http://otel-collector:4317`). Unset = no trace export. |
+| `MEDCORE_OTLP_METRICS_URL` | OTLP metrics endpoint. Unset = no metric export. |
+| `MEDCORE_OTLP_METRICS_STEP` | Push interval for metrics (default `1m`). |
+| `MEDCORE_TRACING_SAMPLING_PROBABILITY` | Float in `[0.0, 1.0]`. Default **0.1** (prod-safe). Dev overrides to 1.0. |
+
+### ⚠️ Startup-visibility contract
+
+On every start, `ObservabilityStartupReporter` logs the current
+export state at INFO:
+
+```
+[OBSERVABILITY] OpenTelemetry trace export: disabled (no OTLP endpoint configured) (sampling probability=0.1)
+[OBSERVABILITY] OpenTelemetry metric export: disabled (no OTLP endpoint configured)
+```
+
+When BOTH exports are unset, the reporter adds a WARN line making
+the silent-by-default posture unmistakable:
+
+```
+[OBSERVABILITY] OpenTelemetry export is fully disabled — spans and metrics are collected in-process but never shipped.
+```
+
+The same state is available programmatically via `/actuator/info`:
+
+```json
+{
+  "telemetry": {
+    "traces":  { "enabled": false, "endpoint": "disabled", "samplingProbability": 0.1 },
+    "metrics": { "enabled": false, "endpoint": "disabled" }
+  }
+}
+```
+
+### 🔺 Sampling escalation during incident response
+
+Production sampling defaults to 0.1 (10% of traces exported). At
+that rate a rare failure may not show up in any sampled trace.
+During an active incident investigation, operators MUST raise
+sampling to 1.0 for the duration:
+
+```bash
+# Kubernetes
+kubectl set env deployment/medcore-api \
+    MEDCORE_TRACING_SAMPLING_PROBABILITY=1.0
+
+# ECS / Fargate (via task-def update + deploy)
+# Set MEDCORE_TRACING_SAMPLING_PROBABILITY=1.0 in the container
+# env; the next task rollout picks it up.
+```
+
+Restore to 0.1 when the incident is closed. Leaving it at 1.0 in
+steady state will generate significantly more trace data than the
+collector expects.
+
+### request_id vs trace_id — they are not the same
+
+Medcore emits FOUR correlation identifiers on every structured log
+line. They serve different purposes and operators need both:
+
+| Field | Scope | Populated by | Use case |
+| ---- | ---- | ---- | ---- |
+| `request_id` | Internal Medcore (single service) | `RequestIdFilter` (3F.1) | Correlate logs → audit rows → response header for a single request within Medcore. Also persisted to `audit.audit_event.request_id`. |
+| `trace_id` | Distributed (cross-service) | Micrometer Tracing (3F.2) | Correlate spans across services if Medcore ever calls external services. Propagated via W3C Trace Context headers. |
+| `span_id` | Per-operation within a trace | Micrometer Tracing | Identifies a specific span inside a trace (one trace contains many spans). |
+| `user_id`, `tenant_id` | Identity + tenancy | `MdcUserIdFilter` / `TenantContextFilter` | Slice logs by authenticated caller or resolved tenant. |
+
+**Key distinction:** `request_id` is how you correlate a log line to
+Medcore's internal audit chain. `trace_id` is how you correlate the
+same log line to a distributed-tracing backend's view of the same
+request. A log line without `trace_id` — e.g., from a scheduled job
+that runs outside any HTTP request — still has `request_id` null
+but other MDC keys populated.
+
+### Combined-correlation query example
+
+Given an error response body carrying `requestId`, find every log
+line AND every audit row for that request:
+
+```bash
+# Logs (json-lines via jq)
+docker logs medcore-api 2>&1 \
+  | jq -rc 'select(.request_id == "<uuid>")'
+```
+
+```sql
+-- Audit events
+SELECT recorded_at, action, outcome, reason
+  FROM audit.audit_event
+ WHERE request_id = '<uuid>'
+ ORDER BY recorded_at;
+```
+
+If OTLP trace export is enabled AND the request was sampled, the
+log line will also carry `trace_id`; a trace backend query by that
+trace id reveals the span graph for the request.
+
+### Known limitation — pull-based metrics not supported
+
+Some target environments — restricted-network enterprise /
+government / hospital deployments — REQUIRE pull-based metrics
+collection (Prometheus scrape) and / or PROHIBIT outbound
+telemetry (OTLP push). Phase 3F.2 ships OTLP push exclusively.
+Deployments subject to either constraint will need a future
+dedicated slice to add a Prometheus scrape endpoint with an
+appropriate authentication story (probably basic auth wired
+into a dedicated scraper role). Accepted as a known limitation
+rather than delay Phase 3F closure — most Medcore-target
+deployments (DPC, telehealth, non-restricted cloud) are
+OTLP-push-compatible.
+
+### PHI discipline on spans + metrics
+
+Custom `medcore.*` observations carry ONLY the closed set:
+
+- `medcore.audit.action` (e.g., `identity.user.login.success`)
+- `medcore.audit.outcome` (SUCCESS / DENIED / ERROR)
+- `medcore.audit.chain.outcome` (clean / broken / verifier_failed)
+
+`ObservationAttributeFilterConfig` enforces this via an allow-list
+on `medcore.*` observations and a deny-list on auto-instrumented
+observations (`http.request.header.*`, `sql.parameters`,
+`http.request.body`, etc.). `TracingPhiLeakageTest` asserts both
+at runtime. Any future tag addition requires synchronised updates
+to the filter, the test, the PHI-exposure review, and a review-pack
+callout.
+
+---
+
 ## Carry-forward tracked out of Phase 3F / 3G
 
-- 3F.2: OpenTelemetry SDK + traces/metrics (the `/actuator/prometheus`
-  endpoint that is currently 404 lands here).
+**Phase 3F is now closed — all four sub-slices landed.**
+
+- 3F.2 close-outs remaining: Prometheus scrape endpoint with
+  authentication → future slice when a concrete operator need
+  exists. OTLP push is the current export path.
 - 3F.4 close-outs remaining: HTTP operator surface for manual
   verification / chain-status inspection → Phase 3J (alongside
   tenancy writes + RBAC).
 - 3F.4: distributed lock for multi-instance deployments (ShedLock
   or equivalent) → ADR at the point Medcore runs multi-instance.
+- 3F.2: alerts / SLOs on emitted metrics → Phase 7+ (compliance
+  ops) or 3I (deployment baseline), whichever demands it first.
+- 3F.2: context propagation for `@Async` / reactive paths → the
+  slice that introduces `@Async` or WebFlux.
 - Build-info / git-commit-info Gradle plugin → separate slice when
   useful (makes `/actuator/info` non-empty).
 - 3G: 400 Bad Request responses remain framework-default — explicit
