@@ -1,6 +1,6 @@
 ---
 status: Active
-last_reviewed: 2026-04-21
+last_reviewed: 2026-04-22
 next_review: 2026-05-05
 cadence: stable-amended-on-phase-close
 owner: Repository owner
@@ -141,7 +141,56 @@ carry-forward item remains open.
 
 #### 3.1.3 Phase 3F.3 — Health and readiness probes
 
-<!-- TODO(content): populated when 3F.3 opens. -->
+- [ ] Spring Boot Actuator dependency added
+      (`org.springframework.boot:spring-boot-starter-actuator`); BOM-
+      managed version; recorded in the 3F.3 slice commit.
+- [ ] `/actuator/health/liveness` returns 200 `{"status":"UP"}`
+      anonymously. Does NOT depend on the datasource — restarting
+      the app cannot fix a DB outage, so the probe must not tie
+      liveness to DB reachability.
+- [ ] `/actuator/health/readiness` returns 200 `{"status":"UP"}`
+      anonymously AND depends on the **runtime datasource path**
+      (`medcore_app` role `SELECT 1`). A passing readiness probe
+      proves the app's request-path is healthy, not merely that the
+      JVM is up.
+- [ ] `/actuator/health` aggregate returns 200 anonymously AND is
+      **detail-free**: response body is exactly `{"status":"..."}`
+      — no `components`, no `details`, no indicator names, no DB
+      version, no dependency graph. Enforced by
+      `management.endpoint.health.show-details: never` and asserted
+      by `ActuatorProbesIntegrationTest`.
+- [ ] `/actuator/info` returns 200 anonymously with JSON content
+      type.
+- [ ] All four exposed endpoints return an `application/*+json` or
+      `application/json` content type.
+- [ ] Non-exposed actuator endpoints return **404** (NOT 401, NOT
+      200): `/actuator/env`, `/actuator/metrics`,
+      `/actuator/prometheus`, `/actuator/beans`,
+      `/actuator/mappings`. The 404 behaviour is the MVC-level
+      non-exposure contract; the security chain is belt, MVC
+      exposure is braces.
+- [ ] `/api/**` still requires authentication (anonymous → 401).
+      Regression assertion in the actuator test suite.
+- [ ] Dedicated `ActuatorSecurityConfig` SecurityFilterChain at
+      `@Order(1)` with `securityMatcher("/actuator/**")`, permitting
+      anonymous access only to `/actuator/health`, `/actuator/health/**`,
+      and `/actuator/info`; everything else under the chain defaults
+      to `authenticated()`.
+- [ ] Runbook `docs/runbooks/observability.md` updated with the
+      Actuator-probes section, Kubernetes / ECS probe-config
+      examples, and the explicit statement that readiness validates
+      the `medcore_app` runtime datasource path (not just JVM
+      liveness).
+- [ ] Existing 109/109 tests still green + new
+      `ActuatorProbesIntegrationTest` cases added (liveness,
+      readiness, aggregate-detail-free, info, env→404, metrics→404,
+      prometheus→404, beans→404, mappings→404, `/api/**`→401).
+- [ ] `RequestIdFilter` (from 3F.1) continues to run on
+      `/actuator/**` paths so probe logs carry `request_id` for
+      debugging.
+- [ ] Non-goals honoured: no Prometheus (3F.2), no OpenTelemetry
+      (3F.2), no scheduled audit job (3F.4), no build-info plugin
+      (separate slice), no custom HealthIndicator.
 
 #### 3.1.4 Phase 3F.4 — Chain verification scheduled job
 

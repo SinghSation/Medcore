@@ -25,6 +25,12 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
     implementation("org.springframework.boot:spring-boot-starter-validation")
+    // Phase 3F.3 — health, liveness, readiness, info endpoints under
+    // /actuator/**. Only `health` and `info` are exposed on the web
+    // (see application.yaml `management.endpoints.web.exposure.include`);
+    // all other actuator endpoints (env, metrics, beans, etc.) remain
+    // explicitly unexposed and return 404. BOM-managed version.
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.flywaydb:flyway-core")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("org.jetbrains.kotlin:kotlin-reflect")

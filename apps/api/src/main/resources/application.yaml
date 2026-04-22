@@ -109,6 +109,45 @@ logging:
     format:
       console: ${MEDCORE_LOG_FORMAT:ecs}
 
+# Spring Boot Actuator (Phase 3F.3). Only `health` and `info` are
+# exposed on the web; every other endpoint (env, metrics, beans,
+# mappings, prometheus, etc.) returns 404 at the Spring MVC layer
+# before any security filter evaluates. Liveness and readiness
+# probes live under `/actuator/health/liveness` and
+# `/actuator/health/readiness` per the Spring Boot probes contract;
+# the `management.endpoint.health.group.*` blocks below pin which
+# health indicators contribute to each probe.
+#
+# `show-details: never` is deliberate: probes and aggregate health
+# are anonymous (see ActuatorSecurityConfig), so we must not reveal
+# indicator names, DB versions, or any component graph to an
+# unauthenticated caller. The response shape is strictly
+# `{"status":"UP"}` | `{"status":"DOWN"}` | etc.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        liveness:
+          # JVM is alive. Deliberately does NOT depend on DB —
+          # restarting the app will not fix a DB outage, so a
+          # liveness probe failing on DB down would just cause
+          # unhelpful restart storms.
+          include: livenessState
+        readiness:
+          # App is ready to serve traffic. Runtime datasource
+          # (medcore_app role) MUST be reachable for a `SELECT 1`
+          # to succeed; this is what makes readiness a meaningful
+          # proof that the request-path is healthy, not merely
+          # that the JVM is up.
+          include: readinessState,db
+
 server:
   port: 8080
   shutdown: graceful

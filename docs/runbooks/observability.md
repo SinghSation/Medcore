@@ -180,11 +180,111 @@ proxy. Configure the proxy's egress CIDR range.
 
 ---
 
-## Carry-forward tracked out of 3F.1
+## Actuator probes (Phase 3F.3)
 
-- 3F.2: OpenTelemetry SDK + traces/metrics.
-- 3F.3: Spring Boot Actuator health + readiness probes (datasource,
-  Flyway).
+Medcore exposes health, liveness, readiness, and info endpoints
+under `/actuator` via Spring Boot Actuator. All are anonymous; the
+aggregate health payload is deliberately detail-free so no
+component graph or DB version leaks to unauthenticated callers.
+
+### Endpoints
+
+| Path | Purpose | Auth | Detail |
+| ---- | ---- | ---- | ---- |
+| `/actuator/health` | Aggregate status | Anonymous | `{"status":"UP"}` only — `show-details: never` |
+| `/actuator/health/liveness` | JVM process alive | Anonymous | `{"status":"UP"}` when the JVM answers; **does NOT depend on DB** — restarting won't fix a DB outage |
+| `/actuator/health/readiness` | App ready to serve traffic | Anonymous | Depends on `readinessState` AND `db` indicator. The `db` check runs `SELECT 1` against the **runtime datasource** (`medcore_app` role), so a passing readiness probe proves the runtime request-path is healthy — not just that the JVM is up |
+| `/actuator/info` | Build / deployment info | Anonymous | `{}` in 3F.3 (no info producers wired yet; build-info plugin is a separate slice) |
+
+Every other actuator endpoint (`env`, `metrics`, `prometheus`,
+`beans`, `mappings`, `configprops`, etc.) is **not exposed** on the
+web and returns 404. The non-exposure is asserted by
+`ActuatorProbesIntegrationTest`; accidentally adding
+`management.endpoints.web.exposure.include: "*"` would flip these
+to 401 (via the security chain) but is still a governance incident.
+
+### Kubernetes / ECS probe configuration
+
+```yaml
+# Kubernetes Deployment pod-spec snippet
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
+```
+
+```json
+// ECS task-def health-check fragment (ALB target-group health check)
+{
+  "healthCheck": {
+    "command": [
+      "CMD-SHELL",
+      "curl -fs http://localhost:8080/actuator/health/readiness || exit 1"
+    ],
+    "interval": 15,
+    "timeout": 5,
+    "retries": 3,
+    "startPeriod": 60
+  }
+}
+```
+
+### Security posture
+
+A dedicated `SecurityFilterChain` (`ActuatorSecurityConfig`) at
+`@Order(1)` matches `/actuator/**` and permits anonymous access to
+the four exposed paths above. Any other `/actuator/*` path under the
+chain would default to `authenticated()`, but since such paths are
+not exposed at the MVC layer they return 404 before the security
+chain evaluates. The chain is belt; MVC exposure is braces. Both
+must be maintained.
+
+The `/api/**` chain is unchanged — bearer-token authentication is
+still required. `ActuatorProbesIntegrationTest` includes a
+regression test that asserts `/api/v1/me` remains a 401 anonymous.
+
+### Troubleshooting
+
+**Readiness probe failing, liveness OK.**
+The app process is alive but its runtime datasource is unreachable.
+Check:
+- `MEDCORE_DB_APP_PASSWORD` is set and matches the role's actual
+  password in the database.
+- Network path from app to RDS / Postgres container is open.
+- The `medcore_app` role has `LOGIN` and is not locked.
+
+**Both probes failing.**
+Usually a JVM-level issue (startup never completed, OOM, deadlock).
+Check container logs; the app may not have reached the Spring Boot
+`ApplicationStartedEvent` (which is when `DatabaseRoleSafetyCheck`
+runs — if that refuses startup, Actuator never registers).
+
+**Readiness returns 200 in test but not in production.**
+Most likely the production `medcore_app` password sync hasn't run
+(see `docs/runbooks/local-services.md` and Phase 3E notes). In
+production the password is provisioned by ops out-of-band; the
+application's VERIFY-only posture will log an error and refuse to
+start if the password env var is blank.
+
+---
+
+## Carry-forward tracked out of 3F.3
+
+- 3F.2: OpenTelemetry SDK + traces/metrics (the `/actuator/prometheus`
+  endpoint that is currently 404 lands here).
 - 3F.4: `audit.verify_chain()` scheduled job.
+- Build-info / git-commit-info Gradle plugin → separate slice when
+  useful (makes `/actuator/info` non-empty).
 - Log-aggregation / shipping infra is an explicit non-goal at Phase
   3F; revisited in Phase 3I (CloudWatch + deployment baseline).
