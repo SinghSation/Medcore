@@ -1,7 +1,7 @@
 ---
 status: Active
-last_reviewed: 2026-04-21
-next_review: 2026-07-21
+last_reviewed: 2026-04-22
+next_review: 2026-07-22
 cadence: living-per-slice
 owner: Repository owner
 ---
@@ -159,6 +159,60 @@ secret material to a managed secrets store.
 
 ---
 
+## Phase 3J — WriteGate + tenancy writes + RBAC *(next)*
+
+**Goal:** Establish `WriteGate` as Medcore's single mutation
+contract, land role-derived authorities, and ship tenancy admin
+writes through the framework with RLS write policies as the DB
+safety net. **Reordered before 3I per ADR-007:** mutation
+correctness precedes deployment readiness — writing real data
+through a governed boundary is a harder gate than hosting that
+data on cloud infrastructure.
+
+**Tier default:** Tier 3 (authorization + RLS policies + new
+mutation architecture).
+
+**Entry:** 3H landed.
+
+**Exit:**
+- **Phase 3J.1 (platform substrate):** `WriteGate` pipeline
+  (validate → authorize → transact-open → apply → audit-success →
+  transact-close) owns the transaction boundary; `WriteContext`
+  with shape-only idempotency slot; `MedcoreAuthority` 7-entry
+  closed enum (`TENANT_READ/UPDATE/DELETE`,
+  `MEMBERSHIP_READ/INVITE/REMOVE`, `SYSTEM_WRITE`); locked role →
+  authority map (OWNER full, ADMIN no-DELETE, MEMBER read-only);
+  tenant-scoped `AuthorityResolver`; V12 RLS write policies on
+  `tenancy.tenant` + `tenancy.tenant_membership`;
+  `tenancy.bootstrap_create_tenant` SECURITY DEFINER function
+  granted to `medcore_migrator` only; `AUTHZ_WRITE_DENIED` audit
+  action; ADR-007 accepted.
+- **Phase 3J.2 (first endpoint):** `PATCH /api/v1/tenants/{slug}`
+  (display_name update) lands through the framework as the
+  golden-path tenancy write; subsequent 3J.N slices add remaining
+  endpoints (`POST /tenants`, membership invite, membership
+  remove, membership role update) using the same contract.
+- Every write emits an audit event with `intent:<command-slug>` in
+  the `reason` field (coarse action + fine intent together).
+- Every denial emits an `AUTHZ_WRITE_DENIED` audit event with a
+  closed-enum `WriteDenialReason` code — no command payload, no
+  row content.
+- Integration tests verify RLS writes refuse cross-tenant writes
+  even when application-layer authz is bypassed.
+
+**Dependencies:** 3H.
+
+**Non-goals:**
+- No self-service tenant signup UX (later product phase).
+- No billing integration (Phase 6A).
+- No idempotency-key deduplication in 3J — shape-only slot on
+  `WriteContext`; dedupe logic lands with Phase 4A+ idempotent
+  flows.
+- No `SYSTEM_WRITE` callers in 3J — reserved for future backfills
+  / reconciliation jobs behind an ADR.
+
+---
+
 ## Phase 3I — Deployment baseline + CI enforcement *(queued)*
 
 **Goal:** First real deployment substrate and machine-enforced CI
@@ -166,7 +220,7 @@ gates that make the governance discipline automatic.
 
 **Tier default:** Tier 3 (infra/Terraform is always Tier 3).
 
-**Entry:** 3H landed.
+**Entry:** 3J landed.
 
 **Exit:**
 - `infra/terraform/` contains a working `dev` environment baseline:
@@ -185,42 +239,13 @@ gates that make the governance discipline automatic.
 - The `dev` environment runs 24/7 with synthetic data only; no
   production data flows into it.
 
-**Dependencies:** 3H.
+**Dependencies:** 3J.
 
 **Non-goals:**
 - No production environment (pre-pilot; no real customer).
 - No blue/green or canary deployment — single rolling ECS deploy.
 - No Kubernetes (EKS) — see `00-vision.md` §6.3.
 - No multi-region.
-
----
-
-## Phase 3J — Tenancy writes + RBAC *(queued)*
-
-**Goal:** Admin write surfaces for tenancy (create/update tenants,
-manage memberships) under RLS write policies. Role-derived
-authorities.
-
-**Tier default:** Tier 3 (authorization + RLS policies).
-
-**Entry:** 3I landed.
-
-**Exit:**
-- `POST /api/v1/tenants`, `PATCH /api/v1/tenants/{slug}`,
-  `POST /api/v1/tenants/{slug}/memberships`,
-  `PATCH /api/v1/tenants/{slug}/memberships/{id}` implemented.
-- V11 migration adds RLS write policies for `tenancy.tenant` and
-  `tenancy.tenant_membership` (closes 3D carry-forward).
-- `MembershipRole` → Spring authority mapping (closes 3A.3
-  carry-forward).
-- Every write emits audit events (create/update/suspend/revoke).
-- Integration tests verify RLS writes respect tenancy scope.
-
-**Dependencies:** 3I.
-
-**Non-goals:**
-- No self-service tenant signup UX (later product phase).
-- No billing integration (Phase 6A).
 
 ---
 
@@ -231,7 +256,7 @@ Decide, document, and integrate.
 
 **Tier default:** Tier 3 (authentication).
 
-**Entry:** 3J landed.
+**Entry:** 3I landed.
 
 **Exit:**
 - ADR-006 (or next-available number) accepted, naming the
@@ -242,7 +267,7 @@ Decide, document, and integrate.
 - Role-to-IdP-group mapping documented and wired.
 - MFA requirement verified for the chosen IdP.
 
-**Dependencies:** 3J.
+**Dependencies:** 3I.
 
 **Non-goals:**
 - No SCIM provisioning unless the chosen IdP makes it cheap.
@@ -259,7 +284,7 @@ cohesive substrate to build on.
 **Tier default:** Tier 2 (frontend, no security-sensitive paths).
 
 **Entry:** 3I landed (CI and deployment in place). May run in
-parallel with 3J/3K.
+parallel with 3K.
 
 **Exit:**
 - `apps/web` wired with Tailwind, Radix UI primitives, TanStack
@@ -925,11 +950,17 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | Role → authority mapping | 3A.3 | **3J** |
 | Generated `packages/api-client` | 3A.3 | **3L** |
 | Production IdP ADR | 3A.3 | **3K** |
-| RLS policies for tenancy writes | 3D | **3J** |
+| RLS policies for tenancy writes | 3D | **3J** (closed in 3J.1 via V12) |
 | Per-tenant chain sharding | 3D | evaluated at **5A** (may stay deferred) |
 | Chain verification endpoint / scheduled job | 3D | **3F** (job) + **3J** (operator surface) |
+| `MEMBERSHIP_ROLE_UPDATE` authority + test + map entry | 3J.1 | **3J.N** (first role-change endpoint) |
+| `WriteResponse` envelope extensibility (typed fields only, no `Any`-map) | 3J.1 | **3J.N or 4A** (first caller that needs metadata) |
+| `AuthorityResolver` caching strategy ADR | 3J.1 | **4A+** (when traffic shape warrants) |
+| `WriteContext.idempotencyKey` dedupe persistence + replay semantics | 3J.1 | **4A** (patient-create) / **6A** (Stripe webhooks) |
 
 ---
 
-*Last reviewed: 2026-04-21. Next review: 2026-07-21 (quarterly).
-Review cadence aligned with competitive-landscape review cadence.*
+*Last reviewed: 2026-04-22 (Phase 3J / 3I reorder per ADR-007 —
+mutation correctness precedes deployment readiness). Next review:
+2026-07-22 (quarterly). Review cadence aligned with competitive-
+landscape review cadence.*

@@ -51,6 +51,18 @@ enum class AuditAction(val code: String) {
      * exception detail (Rule 01).
      */
     AUDIT_CHAIN_VERIFICATION_FAILED("audit.chain.verification_failed"),
+
+    // --- Phase 3J: write-gate authorization denial ---
+    /**
+     * Emitted by every [com.medcore.platform.write.WriteAuditor]
+     * implementation when [com.medcore.platform.write.AuthzPolicy.check]
+     * refuses a mutation. `reason` carries the
+     * [com.medcore.platform.write.WriteDenialReason.code] slug;
+     * `resource_type` / `resource_id` identify what the mutation
+     * targeted; no command payload leaks. Closes the 3G
+     * carry-forward "audit emission on 403 access-denied."
+     */
+    AUTHZ_WRITE_DENIED("authz.write.denied"),
 }
 
 /**

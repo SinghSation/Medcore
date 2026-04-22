@@ -4,6 +4,10 @@ last_reviewed: 2026-04-22
 next_review: 2026-05-22
 cadence: stable-amended-on-phase-close
 owner: Repository owner
+changelog:
+  - 2026-04-22 — Phase 3J DoD populated alongside its first slice
+    (3J.1 — WriteGate substrate). Per-sub-slice entries will land
+    as each 3J.N slice opens.
 ---
 
 # Medcore — Definition of Done
@@ -558,12 +562,158 @@ carry-forward item remains open.
 - [ ] One carry-forward opens to 3I: real AWS Secrets Manager
   implementation + MedcoreAppPasswordSync deletion.
 
-### 3.4 Phases 3I, 3J, 3K, 3L, 3M
+### 3.4 Phase 3J — WriteGate + tenancy writes + RBAC
+
+Phase 3J is divided into a substrate slice (3J.1) and one or more
+endpoint slices (3J.2+). The substrate slice establishes the
+mutation framework, authority model, and DB safety net; endpoint
+slices wire concrete tenancy commands through it. The phase itself
+closes when all declared endpoint slices have landed AND every
+3J-scope carry-forward is reconciled.
+
+#### 3.4.1 Phase 3J.1 — WriteGate substrate + authority model + RLS writes
+
+- [ ] `WriteGate<CMD, R>` executes the pipeline
+      `validate → authorize → transact-open → apply → audit-success →
+      transact-close` in order. `WriteGateTest.apply-runs-validator-
+      then-policy-then-execute-then-audit-success-in-order` asserts
+      the ordering contract.
+- [ ] **WriteGate owns the transaction boundary.** The gate injects
+      `PlatformTransactionManager` and runs `apply + audit-success`
+      inside `TransactionTemplate.execute { ... }`. Callers MUST
+      NOT rely on enclosing `@Transactional`. Rationale and
+      invariant locked in ADR-007 §2.2 and §4.2.
+- [ ] **Denial path:** `WriteAuthorizationException` thrown by the
+      policy fires `WriteAuditor.onDenied` with a closed-enum
+      `WriteDenialReason`, logs nothing at the gate, and re-throws.
+      Denial path does NOT open a transaction.
+      `WriteGateTest.authz-denial-emits-onDenied-audit-and-re-
+      throws-without-running-execute` asserts the contract.
+- [ ] **Denial-audit failure preserves the original denial.** If
+      `onDenied` throws, the gate logs ERROR and re-throws the
+      ORIGINAL `WriteAuthorizationException`. Asserted by
+      `WriteGateTest.denial-audit-throwing-does-not-swallow-the-
+      original-denial`.
+- [ ] **Execute / success-audit failure semantics.** Execute
+      exception propagates and `onSuccess` is never called; the
+      `apply + audit-success` atomic pair rolls back together when
+      either throws. Both asserted by `WriteGateTest`.
+- [ ] `WriteContext(principal: MedcorePrincipal, idempotencyKey:
+      String? = null)` defined. Idempotency slot is **shape-only in
+      3J.1** — framework does not read, dedupe, or log the value.
+      PHI review will re-examine when dedupe logic lands.
+- [ ] **Audit intent via `reason` field.** `WriteAuditor.onSuccess`
+      populates the existing `audit.audit_event.reason` column
+      with `intent:<command-class-slug>` so coarse `action` +
+      fine-grain intent together distinguish sibling mutations. No
+      schema change.
+- [ ] **Validator-less gate skips the validate step** without
+      breaking ordering. Asserted by `WriteGateTest.validator-
+      less-gate-skips-validation-step-and-still-enforces-order`.
+- [ ] `WriteResponse<T>(data, requestId)` uniform success envelope
+      defined. Not yet consumed by any endpoint; first use lands
+      in 3J.2.
+- [ ] `MedcoreAuthority` closed enum implements
+      `GrantedAuthority`. Seven entries: `TENANT_READ`,
+      `TENANT_UPDATE`, `TENANT_DELETE`, `MEMBERSHIP_READ`,
+      `MEMBERSHIP_INVITE`, `MEMBERSHIP_REMOVE`, `SYSTEM_WRITE`.
+      Splitting `MANAGE` pre-emptively (ADR-007 §2.5): renaming a
+      shipped authority is a breaking security-contract change.
+- [ ] **Role → authority map locked** in `MembershipRoleAuthorities`:
+      `OWNER` = every tenancy authority INCLUDING `TENANT_DELETE`;
+      `ADMIN` = every tenancy authority EXCEPT `TENANT_DELETE`;
+      `MEMBER` = `TENANT_READ` + `MEMBERSHIP_READ` only.
+      `SYSTEM_WRITE` is NEVER in any standard role mapping.
+      Asserted by `MembershipRoleAuthoritiesTest` (4 tests).
+- [ ] **Registry discipline for `MedcoreAuthority`** (ADR-007 §2.5,
+      ADR-005 §2.3 pattern). Adding: enum entry + map update +
+      `MembershipRoleAuthoritiesTest` update + review-pack callout.
+      Renaming / removing: superseding ADR.
+- [ ] `AuthorityResolver.resolveFor(userId, tenantSlug)` issues
+      ONE read-only SELECT against `tenancy.tenant` +
+      `tenancy.tenant_membership`; returns an empty set for
+      non-member, suspended-membership, suspended-tenant, and
+      unknown-slug cases. No caching in 3J.1 (deferred behind ADR
+      if performance warrants). Seven cases covered by
+      `AuthorityResolverIntegrationTest`.
+- [ ] `V12__tenancy_rls_write_policies.sql` lands with:
+  - `p_tenant_insert_none` — direct INSERT on `tenancy.tenant`
+    denied for `medcore_app` (`WITH CHECK (false)`). Only
+    `tenancy.bootstrap_create_tenant` can insert.
+  - `p_tenant_update_by_admin_or_owner` — USING + WITH CHECK
+    require ACTIVE OWNER/ADMIN membership in the target tenant.
+  - `p_tenant_delete_by_owner` — USING requires ACTIVE OWNER.
+  - `p_membership_{insert,update,delete}_by_admin_or_owner` —
+    parallel policies on `tenancy.tenant_membership`.
+  - `GRANT SELECT, INSERT, UPDATE, DELETE ON tenancy.tenant /
+    tenancy.tenant_membership TO medcore_app` — role-level grant
+    with RLS above constraining reach.
+  - `tenancy.bootstrap_create_tenant(TEXT, TEXT, UUID) RETURNS
+    UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path =
+    tenancy, pg_temp` — owner `medcore_migrator`. Body INSERTs
+    into `tenancy.tenant` + `tenancy.tenant_membership`.
+    Arguments bound as parameters; no string interpolation.
+  - `REVOKE ALL ON FUNCTION ... FROM PUBLIC;` +
+    `GRANT EXECUTE ... TO medcore_migrator;` — app role cannot
+    invoke. Asserted at runtime.
+- [ ] `TenancyRlsWriteTest` (7 tests) proves RLS is the real
+      envelope: cross-tenant UPDATE refused; cross-tenant DELETE
+      refused; cross-tenant membership INSERT refused; direct
+      INSERT on `tenancy.tenant` refused (routes through bootstrap
+      only); OWNER/ADMIN of own tenant can UPDATE; MEMBER role
+      cannot UPDATE; `bootstrap_create_tenant` not callable as
+      `medcore_app`.
+- [ ] `AuditAction.AUTHZ_WRITE_DENIED("authz.write.denied")` added
+      to the closed-enum registry. Registry discipline (ADR-005
+      §2.3) preserved.
+- [ ] `FlywayMigrationStateCheck.MIN_EXPECTED_INSTALLED_RANK`
+      bumped to 12.
+- [ ] `MedcoreApiApplicationTests.flyway history records expected
+      migrations in order` updated for V12.
+- [ ] ADR-007 accepted: WriteGate mutation architecture + 3J / 3I
+      reorder. Amends `02-roadmap.md` phase order — Tier 3 per
+      ADR-005 §2.3.
+- [ ] `docs/security/phi-exposure-review-3j.md` landed. Risk:
+      None (authz plumbing; no PHI path introduced).
+- [ ] Tests:
+  - `WriteGateTest` (7): ordering; validator short-circuit;
+    denial emits audit and re-throws; denial-audit failure
+    preserves denial; execute-throws skips success audit;
+    success-audit-throws propagates; validator-less gate.
+  - `MembershipRoleAuthoritiesTest` (4): OWNER full set; ADMIN
+    no-DELETE; MEMBER read-only; OWNER is strict superset of
+    ADMIN.
+  - `AuthorityResolverIntegrationTest` (7): active OWNER/ADMIN/
+    MEMBER; suspended membership empty; suspended tenant empty;
+    non-member empty; unknown slug empty.
+  - `TenancyRlsWriteTest` (7): RLS envelope as above.
+- [ ] Existing 193 tests still green; total after 3J.1: **218/218
+      across 47 suites (+25).**
+- [ ] Carry-forward closed in 3J.1: RLS policies for tenancy
+      writes (3D → 3J via V12); role → authority mapping (3A.3 →
+      3J via `MembershipRoleAuthorities` + `AuthorityResolver`).
+- [ ] Carry-forward opens to 3J.2+: first concrete endpoint
+      (`PATCH /api/v1/tenants/{slug}` for display_name) through
+      the framework; `POST /api/v1/tenants`; membership
+      invite/remove/role-update; chain verification operator
+      surface (carried from 3F.4 per 3F.4 non-goals and the
+      carry-forward ledger).
+
+#### 3.4.2 Phase 3J.2+ — Endpoint slices
+
+<!-- TODO(content): populated as each endpoint slice opens. Each
+     slice's DoD row MUST assert: WriteGate is the only mutation
+     entry point for the endpoint; onSuccess populates
+     `intent:<command-slug>`; authz denial emits
+     AUTHZ_WRITE_DENIED; integration tests cover happy path +
+     cross-tenant RLS refusal + role-matrix. -->
+
+### 3.5 Phases 3I, 3K, 3L, 3M
 
 <!-- TODO(content): per-phase checklists populated as each phase opens
      per ADR-005 §2.4 (living-per-slice cadence). -->
 
-### 3.5 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.6 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
@@ -583,6 +733,7 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-21 (Phase 3F.1 DoD populated alongside its
-first slice). Next review: 2026-05-05, or on the next phase opening
-(whichever is sooner).*
+*Last reviewed: 2026-04-22 (Phase 3J.1 DoD populated alongside its
+substrate slice; Phase 3J / 3I reorder reflected in §3.4 + §3.5
+per ADR-007). Next review: 2026-05-22, or on the next phase
+opening (whichever is sooner).*

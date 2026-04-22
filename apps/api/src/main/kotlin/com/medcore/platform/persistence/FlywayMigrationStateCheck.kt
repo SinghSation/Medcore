@@ -105,14 +105,15 @@ class FlywayMigrationStateCheck(private val dataSource: DataSource) {
          * every migration baked into this build's resources.
          *
          * Migration IDs in the `db/migration` tree:
-         *   V1..V11 at time of Phase 3H. After V11 applies, the
-         *   history table's `installed_rank` reaches 11.
+         *   V1..V12 at time of Phase 3J (V12 added RLS write
+         *   policies + bootstrap function). After V12 applies, the
+         *   history table's `installed_rank` reaches 12.
          *
          * Bump this constant whenever a new VN migration lands (the
          * `safe-db-migration` skill in `.claude/skills/` carries this
          * as step N of the migration checklist).
          */
-        const val MIN_EXPECTED_INSTALLED_RANK: Int = 11
+        const val MIN_EXPECTED_INSTALLED_RANK: Int = 12
     }
 }
 

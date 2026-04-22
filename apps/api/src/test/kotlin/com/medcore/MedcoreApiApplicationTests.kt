@@ -79,6 +79,7 @@ class MedcoreApiApplicationTests {
                 Row("9", "V9__audit_event_v2.sql", true),
                 Row("10", "V10__runtime_role_grants.sql", true),
                 Row("11", "V11__medcore_migrator_role.sql", true),
+                Row("12", "V12__tenancy_rls_write_policies.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",
