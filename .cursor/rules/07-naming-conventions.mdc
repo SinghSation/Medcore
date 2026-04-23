@@ -1,0 +1,223 @@
+---
+description: Naming conventions for packages, classes, DTOs, authorities, audit actions, migrations, tests, and commits. Forward-looking only — do NOT rename existing code.
+globs:
+  - "apps/api/**"
+  - "apps/web/**"
+  - "packages/**"
+alwaysApply: false
+---
+
+# Rule 07 — Naming Conventions
+
+Applies to all new files from approval forward. **Legacy names stay as-is
+unless a file is already being edited for other reasons.** Retroactive
+rename campaigns are forbidden — they produce churn, blame-history noise,
+and merge conflicts without product value.
+
+This rule codifies the naming conventions already established by
+Phases 3A–3K + 4A.1–4B.2 + VS1 Chunks A–B. It does not introduce new
+concepts; it freezes existing practice so future code follows the
+same shapes.
+
+---
+
+## §1 Packages and folders
+
+**Domain-first, behavior-second.** Every feature lives under its
+domain root, with sub-folders per layer-behavior.
+
+```
+<domain>/<resource>/<behavior>/
+```
+
+- **Domain roots:** `clinical`, `identity`, `tenancy`, `platform`,
+  `architecture` (tests only)
+- **Behaviors:** `read`, `write`, `api`, `persistence`, `model`,
+  `service`, `context`, `fhir`
+- **Platform substrate:** `platform/<capability>/` — e.g.
+  `platform/audit`, `platform/read`, `platform/write`,
+  `platform/security`, `platform/observability`, `platform/persistence`
+
+**Example (Phase 4A.2–4B.2):**
+```
+clinical/
+  patient/
+    api/            — PatientController, PatientDtos, PatientFhirController
+    read/           — GetPatient*, ListPatients*
+    write/          — CreatePatient*, UpdatePatientDemographics*,
+                      AddPatientIdentifier*, RevokePatientIdentifier*,
+                      PatientSnapshot, Patchable, PatientWriteConfig
+    persistence/    — PatientEntity, PatientRepository
+    model/          — AdministrativeSex, MrnSource, PatientStatus
+    fhir/           — FhirPatient, PatientFhirMapper
+```
+
+**Rule:** never mix behaviors in one package. `patient/read/CreatePatientHandler.kt`
+is wrong even if it would compile — Create belongs in `write/`.
+
+---
+
+## §2 Backend class suffixes (Kotlin)
+
+Every concrete role has a specific suffix. One class, one role.
+
+| Suffix | Role | Examples |
+|---|---|---|
+| `*Command` | Immutable input data class for a handler | `CreatePatientCommand`, `ListPatientsCommand`, `GetPatientCommand` |
+| `*Handler` | Business logic; runs inside WriteGate / ReadGate tx | `CreatePatientHandler`, `GetPatientHandler` |
+| `*Policy` | Authorization gate; throws `WriteAuthorizationException` on denial | `CreatePatientPolicy`, `ListPatientsPolicy` |
+| `*Validator` | Domain-level field validation (post-DTO binding) | `CreatePatientValidator`, `AddPatientIdentifierValidator` |
+| `*Auditor` | Emits audit rows on success + denial | `CreatePatientAuditor`, `ListPatientsAuditor` |
+| `*Snapshot` | Immutable DB-projection shape returned by handlers | `PatientSnapshot`, `MembershipSnapshot`, `TenantSnapshot` |
+| `*Result` | Handler return type when Snapshot is insufficient (paginated pages, paired data) | `ListPatientsResult`, `TenantMembershipResult` |
+| `*Request` | HTTP request DTO bound by Spring MVC `@RequestBody` | `CreatePatientRequest`, `InviteMembershipRequest` |
+| `*Response` | HTTP response DTO (always wrapped in `ApiResponse<T>` envelope) | `PatientResponse`, `PatientListResponse`, `MembershipResponse` |
+| `*Config` | Spring `@Configuration` class | `PatientWriteConfig`, `FlywayDataSourceConfig` |
+| `*Gate`, `*Hook`, `*Filter` | Platform substrate | `WriteGate`, `ReadGate`, `PhiRlsTxHook`, `TenantContextFilter` |
+| `*Repository` | Spring Data JPA interface | `PatientRepository`, `TenantMembershipRepository` |
+| `*Entity` | JPA entity class (NOT a `data class`) | `PatientEntity`, `TenantEntity` |
+| `*Exception` | Throwable | `WriteValidationException`, `PreconditionRequiredException` |
+
+**Command-set convention.** For each command name, the full stack is
+named identically: `<Verb><Resource>{Command, Handler, Policy, Validator,
+Auditor}`. Missing files are OK (reads typically have no Validator);
+extra files are not.
+
+---
+
+## §3 Frontend class/module names (TypeScript)
+
+| Suffix / shape | Role | Examples |
+|---|---|---|
+| `*Page` | Top-level route component | `LoginPage`, `HomePage`, `PatientListPage` |
+| `*Provider` | React context provider | `AuthProvider`, `QueryProvider` |
+| `*Route` | Router-level wrapper | `ProtectedRoute`, `AppRouter` |
+| `*.ts` (no suffix, kebab/single) | Library module under `src/lib/` | `api-client.ts`, `auth.ts`, `patients.ts`, `utils.ts` |
+| `components/ui/*.tsx` (lowercase) | shadcn/ui primitive | `button.tsx`, `card.tsx`, `input.tsx`, `label.tsx` |
+| `*.test.{ts,tsx}` | Colocated test | `auth.test.ts`, `PatientListPage.test.tsx` |
+
+---
+
+## §4 Authorities (`MedcoreAuthority` enum)
+
+Format: `RESOURCE_ACTION`, both uppercase, singular resource noun,
+imperative verb.
+
+✅ `PATIENT_READ`, `PATIENT_CREATE`, `PATIENT_UPDATE`, `MEMBERSHIP_INVITE`,
+   `MEMBERSHIP_ROLE_UPDATE`, `MEMBERSHIP_REVOKE`
+❌ `READ_PATIENT` (verb-first)
+❌ `PATIENTS_READ` (plural resource)
+❌ `PATIENT_CAN_READ` (modal qualifier)
+
+---
+
+## §5 Audit actions (`AuditAction` enum)
+
+**Two parallel forms must match.** Java enum in `SCREAMING_SNAKE_CASE`,
+persisted `code` in `dot.separated.lowercase`.
+
+| Enum name | Wire `code` |
+|---|---|
+| `IDENTITY_USER_PROVISIONED` | `identity.user.provisioned` |
+| `TENANCY_MEMBERSHIP_INVITED` | `tenancy.membership.invited` |
+| `CLINICAL_PATIENT_ACCESSED` | `clinical.patient.accessed` |
+| `CLINICAL_PATIENT_LIST_ACCESSED` | `clinical.patient.list_accessed` |
+| `AUTHZ_READ_DENIED` | `authz.read.denied` |
+
+Prefix families are **closed**: `identity`, `tenancy`, `clinical`,
+`authz`, `audit.chain`. New families require an ADR. Wire codes are a
+**stable audit contract** — rename = breaking change = superseding
+ADR, never in-place.
+
+---
+
+## §6 Reason slugs (audit `reason` column)
+
+Format: pipe-delimited tokens. First token is always
+`intent:<domain>.<resource>.<action>`. Additional tokens are `key:value`,
+all **closed-enum or bounded integer**, never free text.
+
+```
+intent:clinical.patient.create|mrn_source:GENERATED
+intent:clinical.patient.update_demographics|fields:nameGiven,nameFamily
+intent:clinical.patient.list|count:3|limit:20|offset:0
+intent:tenancy.membership.update_role|from:OWNER|to:ADMIN
+intent:clinical.patient.access|denial:INSUFFICIENT_AUTHORITY
+```
+
+**Never in a reason:** patient names, MRNs, emails, phone numbers,
+free-text comments, exception messages, IP addresses, or anything not
+drawn from a closed enum or bounded integer. The audit envelope is
+deliberately flat (ADR-003 §3) and dynamic-but-bounded data lives in
+these tokens.
+
+---
+
+## §7 Flyway migrations
+
+- **Filename:** `V<N>__<snake_case_description>.sql`
+- **Placement:** `apps/api/src/main/resources/db/migration/<domain>/`
+  where `<domain>` ∈ {`identity`, `tenancy`, `audit`, `clinical`, `flyway`}
+- `N` is project-wide monotonic. Domain folders organize by *owner*,
+  not by number — migrations from different domains can interleave.
+- `__` (double underscore) separates version from description; the
+  description uses single underscores.
+
+---
+
+## §8 Tests
+
+| Suffix | Role |
+|---|---|
+| `*Test.kt` | Unit test (mocks collaborators, no Spring context) |
+| `*IntegrationTest.kt` | Integration test (`@SpringBootTest` + Testcontainers) |
+| `*LogPhiLeakageTest.kt` | Rule 01 control — PHI must never appear in stdout |
+| `*RlsTest.kt` | Row-Level Security enforcement proof |
+| `*ArchTest.kt` | ArchUnit architectural invariant |
+| `*ConcurrencyTest.kt` | Race / optimistic-concurrency proof |
+
+Frontend tests: `*.test.tsx` for components, `*.test.ts` for modules,
+colocated with the subject under test.
+
+---
+
+## §9 Commit messages (Conventional Commits)
+
+Format: `<type>(<scope>): <subject>` (Angular-style).
+
+- **type** ∈ {`feat`, `fix`, `docs`, `governance`, `chore`, `refactor`}
+- **scope** ∈ {`clinical`, `tenancy`, `identity`, `platform`, `persistence`,
+  `web`, `audit`, `adr`, `runbook`}
+- **subject**: lowercase, imperative, no trailing period.
+- Optional phase tag in parentheses: `(4B.1)`, `(4A.5)`, `(VS1)`.
+
+Examples from history:
+- `feat(clinical): first real PHI write path — patient create + update (4A.2)`
+- `fix(platform): wire @Primary + @FlywayDataSource DataSource pair so make api-dev starts`
+- `docs(runbook): pin stable subject + post-1900 birth dates for VS1 demo seed`
+
+---
+
+## §10 Enforcement posture
+
+- **Forward-only.** This rule ships *after* VS1 Chunk B. Every file
+  created from this point forward MUST comply.
+- **Opportunistic backfill.** When a file is already being edited for
+  other reasons, bring it into compliance in the same diff. Don't open
+  separate rename PRs.
+- **No retroactive sweeps.** Do not open a PR titled "rename X for
+  consistency" unless the rename is load-bearing for a real feature or
+  bug fix.
+- **Naming drift is a review finding, not a blocker.** Reviewers call
+  out violations as optional-fix unless the non-compliant name is
+  actively misleading or conflicts with an existing name.
+
+---
+
+## §11 Related
+
+- **ADR-003** — Audit schema + append-only invariant (§5, §6).
+- **ADR-007** — WriteGate / ReadGate contracts (§2, §3).
+- **Rule 02** — Contract-first API surfaces (overlaps with §3).
+- **Rule 04** — Frontend standards (overlaps with §3).
+- **Rule 06** — Audit + observability naming (overlaps with §5, §6).
