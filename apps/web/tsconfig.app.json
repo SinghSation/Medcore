@@ -21,7 +21,12 @@
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
 
-    "types": ["vite/client", "vitest/globals"]
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "include": ["src"]
 }
