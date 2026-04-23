@@ -1,6 +1,8 @@
 package com.medcore.clinical.patient.api
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.medcore.clinical.patient.read.GetPatientCommand
+import com.medcore.clinical.patient.read.GetPatientHandler
 import com.medcore.clinical.patient.write.AddPatientIdentifierCommand
 import com.medcore.clinical.patient.write.AddPatientIdentifierHandler
 import com.medcore.clinical.patient.write.CreatePatientCommand
@@ -12,12 +14,13 @@ import com.medcore.clinical.patient.write.RevokePatientIdentifierHandler
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsCommand
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsHandler
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsSnapshot
+import com.medcore.platform.api.ApiResponse
 import com.medcore.platform.api.PreconditionRequiredException
 import com.medcore.platform.observability.MdcKeys
+import com.medcore.platform.read.ReadGate
 import com.medcore.platform.security.MedcorePrincipal
 import com.medcore.platform.write.WriteContext
 import com.medcore.platform.write.WriteGate
-import com.medcore.platform.write.WriteResponse
 import com.medcore.platform.write.WriteValidationException
 import jakarta.validation.Valid
 import java.util.UUID
@@ -27,6 +30,7 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.web.bind.annotation.DeleteMapping
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -91,7 +95,50 @@ class PatientController(
     private val revokePatientIdentifierGate:
         WriteGate<RevokePatientIdentifierCommand, PatientIdentifierSnapshot>,
     private val revokePatientIdentifierHandler: RevokePatientIdentifierHandler,
+    // --- Phase 4A.4 read path ---
+    private val getPatientGate: ReadGate<GetPatientCommand, PatientSnapshot>,
+    private val getPatientHandler: GetPatientHandler,
 ) {
+
+    /**
+     * Read a patient (Phase 4A.4). `PATIENT_READ` required
+     * (OWNER, ADMIN, or MEMBER per the 4A.1 role map).
+     *
+     * First PHI read endpoint in Medcore. Every successful 200
+     * emits a `CLINICAL_PATIENT_ACCESSED` audit row INSIDE the
+     * read-only transaction (ADR-003 §2 atomicity). 404 and
+     * 500 emit nothing (no disclosure occurred). Policy-level
+     * denials emit `AUTHZ_READ_DENIED`; filter-level denials
+     * (SUSPENDED / not-a-member) emit the existing
+     * `tenancy.membership.denied` from `TenantContextFilter`.
+     *
+     * Response: `ApiResponse<PatientResponse>` + `ETag: "<rowVersion>"`
+     * header for clients that want to round-trip a PATCH after.
+     * Cross-tenant patientId returns 404 (identical to unknown
+     * id) — no existence leak.
+     */
+    @GetMapping(
+        "/{patientId}",
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun getPatient(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable patientId: UUID,
+    ): ResponseEntity<ApiResponse<PatientResponse>> {
+        val command = GetPatientCommand(slug = slug, patientId = patientId)
+        val context = WriteContext(principal = principal, idempotencyKey = null)
+        val snapshot = getPatientGate.apply(command, context) { cmd ->
+            getPatientHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = PatientResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok()
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
+    }
 
     /**
      * Create a patient (Phase 4A.2). PATIENT_CREATE required
@@ -109,13 +156,13 @@ class PatientController(
         @RequestHeader(name = "X-Confirm-Duplicate", required = false, defaultValue = "false")
         confirmDuplicate: Boolean,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): ResponseEntity<WriteResponse<PatientResponse>> {
+    ): ResponseEntity<ApiResponse<PatientResponse>> {
         val command = body.toCommand(slug, confirmDuplicate)
         val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
         val snapshot = createPatientGate.apply(command, context) { cmd ->
             createPatientHandler.handle(cmd, context)
         }
-        val responseBody = WriteResponse(
+        val responseBody = ApiResponse(
             data = PatientResponse.from(snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
@@ -150,7 +197,7 @@ class PatientController(
         @RequestBody body: JsonNode?,
         @RequestHeader(name = "If-Match", required = false) ifMatch: String?,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): ResponseEntity<WriteResponse<PatientResponse>> {
+    ): ResponseEntity<ApiResponse<PatientResponse>> {
         val expectedRowVersion = parseIfMatch(ifMatch)
         val command = UpdatePatientDemographicsRequestMapper.toCommand(
             slug = slug,
@@ -162,7 +209,7 @@ class PatientController(
         val result = updatePatientDemographicsGate.apply(command, context) { cmd ->
             updatePatientDemographicsHandler.handle(cmd, context)
         }
-        val responseBody = WriteResponse(
+        val responseBody = ApiResponse(
             data = PatientResponse.from(result.snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
@@ -203,13 +250,13 @@ class PatientController(
         @PathVariable patientId: UUID,
         @Valid @RequestBody body: AddPatientIdentifierRequest,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): ResponseEntity<WriteResponse<PatientIdentifierResponse>> {
+    ): ResponseEntity<ApiResponse<PatientIdentifierResponse>> {
         val command = body.toCommand(slug, patientId)
         val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
         val snapshot = addPatientIdentifierGate.apply(command, context) { cmd ->
             addPatientIdentifierHandler.handle(cmd, context)
         }
-        val responseBody = WriteResponse(
+        val responseBody = ApiResponse(
             data = PatientIdentifierResponse.from(snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )

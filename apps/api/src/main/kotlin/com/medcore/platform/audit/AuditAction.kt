@@ -245,6 +245,72 @@ enum class AuditAction(val code: String) {
      * returns 204 with no audit row.
      */
     PATIENT_IDENTIFIER_REVOKED("clinical.patient.identifier.revoked"),
+
+    // --- Phase 4A.4: patient read (first PHI read audit) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/patients/{patientId}` when
+     * the caller successfully reads a patient row (Phase
+     * 4A.4, HIPAA §164.312(b) Audit Controls).
+     *
+     * **This is the first PHI READ audit action in Medcore.**
+     * Separate from the write-audit family because reads and
+     * writes are fundamentally different compliance events —
+     * a forensic query "how many PHI disclosures happened?"
+     * must distinguish them.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.read.GetPatientAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.patient"`
+     *   - `resource_id`   = disclosed patient UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.patient.access"`
+     *
+     * **Emission discipline (NORMATIVE):**
+     *   - Emit ONLY on a 200 OK response (disclosure occurred).
+     *   - Do NOT emit for 404 (no disclosure).
+     *   - Do NOT emit for 500 (application bug; disclosure
+     *     did not complete).
+     *   - Denial paths use [AUTHZ_READ_DENIED], NOT this action.
+     *
+     * **Runs INSIDE the read-only transaction** (ADR-003 §2
+     * extended to reads). If the audit write fails, the
+     * transaction rolls back, the response body is never
+     * serialised, and the caller receives 500 with no PHI
+     * disclosure.
+     */
+    CLINICAL_PATIENT_ACCESSED("clinical.patient.accessed"),
+
+    /**
+     * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
+     * refuses a read (Phase 4A.4). Sister entry to
+     * [AUTHZ_WRITE_DENIED].
+     *
+     * Distinct entry rather than reusing `AUTHZ_WRITE_DENIED`
+     * so compliance filtering can separate denied-reads from
+     * denied-writes:
+     *
+     * ```sql
+     * -- all denied PHI reads, excluding denied writes
+     * SELECT * FROM audit.audit_event
+     *  WHERE action = 'authz.read.denied'
+     *    AND resource_type LIKE 'clinical.%';
+     * ```
+     *
+     * Normative shape carries
+     * `reason = "intent:<domain>.<resource>.access|denial:<code>"`.
+     * For 4A.4:
+     * `"intent:clinical.patient.access|denial:<WriteDenialReason.code>"`.
+     *
+     * `resource_type` = would-have-been-accessed resource type.
+     * `resource_id` = URL-path target identifier (known at
+     * denial time; unlike write-create denials where the
+     * target UUID does not yet exist).
+     */
+    AUTHZ_READ_DENIED("authz.read.denied"),
 }
 
 /**

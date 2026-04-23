@@ -1825,12 +1825,99 @@ breaking v1.1 amendments surfaced by the exercise.
   - CF-4A3-3 — future pattern v1.2 amendments if surfaced by
     later slices.
 
-#### 3.8.5 Phase 4A.3.1+ — Address/contact history, FHIR read, read audit, merge
+#### 3.8.5 Phase 4A.4 — Patient read endpoint + read audit (first PHI read)
+
+**Scope flip vs earlier TODO:** previously this slot had
+4A.4 = FHIR mapping and 4A.5 = read+audit. Reconciled in
+4A.4 execution — read+audit ships FIRST (general case);
+FHIR mapping is the specialization that consumes the read
+path in 4A.5.
+
+First PHI READ endpoint in Medcore. Introduces the
+`ReadGate` substrate for audit-atomic read flows.
+
+- [ ] `com.medcore.platform.read.ReadGate<CMD, R>` — sister
+      class to `WriteGate`. 5-step pipeline: authorize → tx
+      open → pre-exec hook → execute → audit-success.
+      Transaction is writable (NOT read-only) because the
+      audit INSERT shares it for ADR-003 §2 atomicity.
+- [ ] `com.medcore.platform.read.ReadAuthzPolicy<CMD>` +
+      `ReadAuditor<CMD, R>` — sister interfaces. Same shape
+      as Write counterparts; separate types for semantic
+      clarity.
+- [ ] `WriteContext` + `WriteTxHook` REUSED — no new types.
+      KDocs updated to note read-path reuse. Cross-cutting
+      rename to operation-neutral names tracked as a future
+      cleanup slice.
+- [ ] **`WriteResponse<T>` → `ApiResponse<T>` rename** —
+      single canonical response envelope across reads and
+      writes. Wire shape unchanged. 3 files updated.
+      Decision: no `ReadResponse<T>` fragmentation.
+- [ ] `GetPatientCommand` + `GetPatientPolicy` (checks
+      `PATIENT_READ`) + `GetPatientHandler` (load patient,
+      404 on missing / cross-tenant / DELETED) +
+      `GetPatientAuditor` (emits NORMATIVE shape on 200
+      only; NEVER on 404/500). Reuses `PatientSnapshot`
+      from 4A.2.
+- [ ] `GET /api/v1/tenants/{slug}/patients/{patientId}`
+      appended to `PatientController`. Response:
+      `ApiResponse<PatientResponse>` + `ETag: "<rowVersion>"`
+      header.
+- [ ] Two new `AuditAction` entries with NORMATIVE KDoc:
+      `CLINICAL_PATIENT_ACCESSED`
+      (`clinical.patient.accessed`, first PHI read action)
+      and `AUTHZ_READ_DENIED` (`authz.read.denied`,
+      distinct from `AUTHZ_WRITE_DENIED` so compliance
+      filters can separate reads vs writes).
+- [ ] **ArchUnit Rule 14** — `ReadGate.apply` invocable
+      only from `..api..` + `..read..` (test adjacency).
+      Symmetric to Rule 12 for writes. New test file
+      `ReadBoundaryArchTest`.
+- [ ] **ArchUnit Rules 1, 9, 11 extended** — `.read`
+      package allowlisted for repository access (Rule 1),
+      `AuditEventCommand` construction (Rule 9),
+      `AuditAction` references (Rule 11). Non-breaking
+      additions.
+- [ ] No new error codes (404 / 403 / 500 all existing).
+- [ ] Tests (16 new across 3 suites):
+  - `ReadGateTest` (5) — substrate pipeline, success order,
+    policy denial, onSuccess-throw rollback, denial-audit-
+    failure, null-hook.
+  - `GetPatientIntegrationTest` (9) — HTTP→DB happy,
+    OWNER/ADMIN/MEMBER all read, 401 unauthenticated, 404
+    (unknown/cross-tenant/DELETED), filter-level 403
+    (no-member/SUSPENDED), NO `clinical.patient.accessed`
+    emitted on 404.
+  - `PatientReadLogPhiLeakageTest` (1) — GET with
+    distinctive PHI tokens; stdout grep-clean.
+- [ ] **PHI-exposure review** —
+      `docs/security/phi-exposure-review-4a-4.md`.
+      Risk: Low. 11 attack-surface scenarios analysed
+      including read-tx atomicity, cross-tenant id-probing,
+      audit-enumeration via 404s.
+- [ ] **Pattern template** bumped v1.1 → v1.2 with
+      §12 "Read path" + §10 checklist additions.
+- [ ] Existing 418 tests still green; total after 4A.4:
+      **434/434 across the full suite (+16)**.
+- [ ] **Carry-forwards closed in 4A.4**:
+  - GET endpoint deferred to 4A.5 (4A.2 PHI review) — closed.
+  - Read-audit infrastructure (4A.0 note) — closed.
+  - ArchUnit Rule 13's original read-path intent —
+    demonstrated operationally via PhiRlsTxHook reuse.
+- [ ] **Carry-forwards opened by 4A.4**:
+  - CF-4A4-1: `If-None-Match` / 304 for PHI GETs.
+  - CF-4A4-2: Partial-read modes with `mode:` reason token.
+  - CF-4A4-3: Anomalous-404 detection (probe-detector).
+  - CF-4A4-4: `GET /patients` list endpoint with pagination.
+  - CF-4A4-5: ArchUnit rule forbidding `save*` in `.read`.
+  - CF-4A4-6: Cross-cutting rename of `WriteContext` /
+    `WriteTxHook`.
+
+#### 3.8.6 Phase 4A.5+ — FHIR read, workflow-benchmark, history, merge
 
 <!-- TODO(content): populated as each 4A sub-slice opens:
-     - 4A.3.1 (was 4A.3): Address + contact append-only history tables
-     - 4A.4: GET /fhir/r4/Patient/{id} + US Core mapping
-     - 4A.5: Read endpoint + read auditing (CLINICAL_PATIENT_ACCESSED)
+     - 4A.5 (was 4A.4): GET /fhir/r4/Patient/{id} + US Core mapping
+     - 4A.3.1: Address + contact append-only history tables
      - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
      - 4A.N: Merge workflow (dedicated slice) -->
 
@@ -1854,9 +1941,10 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.3 — first real pattern
-reuse: identifier add + revoke through the clinical-write-
-pattern v1.0 baseline. V17 closes V14's identifier RLS role-
-gate gap. Template amended to v1.1 with three non-breaking
-clarifications. 418/418 across the full suite). Next review:
-2026-05-25, or on the next phase opening (whichever is sooner).*
+*Last reviewed: 2026-04-23 (Phase 4A.4 — first PHI READ endpoint
+shipped: ReadGate substrate + CLINICAL_PATIENT_ACCESSED /
+AUTHZ_READ_DENIED audit actions + WriteResponse→ApiResponse
+canonical envelope + ArchUnit Rule 14. Template amended to
+v1.2 with §12 "Read path". 434/434 across the full suite).
+Next review: 2026-05-25, or on the next phase opening
+(whichever is sooner).*

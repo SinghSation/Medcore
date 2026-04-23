@@ -76,6 +76,9 @@ class MutationBoundaryArchTest {
             .that().areAssignableTo(Repository::class.java)
             .should().onlyBeAccessed().byClassesThat().resideInAnyPackage(
                 "..write..",
+                "..read..",   // Phase 4A.4: read handlers legitimately
+                              // access repositories under ReadGate's
+                              // read-only tx + PhiRlsTxHook envelope.
                 "..service..",
                 "..persistence..",
                 "..platform..",
@@ -83,9 +86,10 @@ class MutationBoundaryArchTest {
             )
             .`as`(
                 "JPA repositories are accessed only from handler " +
-                    "(.write), service, persistence, platform, or " +
-                    "identity packages — NEVER from controllers, " +
-                    "filters, auditors, or policies. See ADR-007 §2.10.",
+                    "(.write / .read), service, persistence, platform, " +
+                    "or identity packages — NEVER from controllers, " +
+                    "filters, auditors, or policies. See ADR-007 §2.10 " +
+                    "+ Phase 4A.4 read-path addition.",
             )
 
     /**

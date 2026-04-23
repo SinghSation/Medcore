@@ -63,6 +63,9 @@ class SecurityDisciplineArchTest {
         noClasses()
             .that().resideOutsideOfPackages(
                 "..write..",
+                "..read..",   // Phase 4A.4: ReadAuditor implementations
+                              // construct AuditEventCommand for
+                              // CLINICAL_PATIENT_ACCESSED / AUTHZ_READ_DENIED.
                 "..service..",
                 "..audit..",
                 "..persistence..",
@@ -132,6 +135,8 @@ class SecurityDisciplineArchTest {
         noClasses()
             .that().resideOutsideOfPackages(
                 "..write..",
+                "..read..",   // Phase 4A.4: ReadAuditor packages emit
+                              // read-specific audit actions.
                 "..service..",
                 "..audit..",
                 "..persistence..",

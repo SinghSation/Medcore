@@ -1,14 +1,15 @@
-# Clinical Write Pattern — v1.1
+# Clinical Write + Read Pattern — v1.2
 
-**Status:** NORMATIVE as of Phase 4A.2 (v1.0); amended 4A.3 (v1.1).
+**Status:** NORMATIVE as of Phase 4A.2 (v1.0); amended 4A.3 (v1.1);
+amended 4A.4 (v1.2) to cover the read path.
 **Reference implementations:** `com.medcore.clinical.patient.*`
-— patient demographics (4A.2) + patient identifiers (4A.3). See
-file map in §9.
-**Scope:** every future PHI-bearing write surface (4A.5 read +
-read-audit; 4B scheduling; 4C encounters; and beyond).
-**Change log:** §11 tracks revisions. v1.1 lands three
-clarifications driven by 4A.3 pattern-validation — no
-breaking changes to v1.0 REQUIRED rules.
+— patient demographics (4A.2) + patient identifiers (4A.3) +
+patient read (4A.4). See file map in §9.
+**Scope:** every future PHI-bearing write AND read surface
+(4A.5 FHIR mapping; 4B scheduling; 4C encounters; and beyond).
+**Change log:** §11 tracks revisions. v1.2 adds §12 "Read path"
+and related §10 checklist items — non-breaking additions to
+v1.0/v1.1 REQUIRED rules.
 
 ---
 
@@ -850,3 +851,138 @@ code is the canonical reference at v1.0.
 | ---- | ---- | ---- | ---- |
 | 1.0 | 2026-04-23 | Initial extraction from 4A.2 | Phase 4A.2 stabilization |
 | 1.1 | 2026-04-23 | Three non-breaking additions: (a) §10 checklist prompt "new authority or reuse?"; (b) §7.2 clarification — `If-Match` scope is PHI PATCH only (not DELETE or POST); (c) §1.1 RLS delegation option documented + caveat on satellite role gating | Phase 4A.3 pattern-validation |
+| 1.2 | 2026-04-23 | New §12 "Read path" covers `ReadGate`, `ReadAuthzPolicy`, `ReadAuditor`, audit-atomic 200-only emission, and the not-read-only-tx rule. §10 checklist gains read-specific items (new AuditAction for reads, 200-only emission check, `AUTHZ_READ_DENIED` on policy denial, PHI-leakage test on GET). §7.1 gains a read-path symmetry note. Response-envelope canonical name: `ApiResponse<T>` (renamed from `WriteResponse<T>`). Non-breaking. | Phase 4A.4 read-path slice |
+
+---
+
+## 12. Read path (v1.2 addition)
+
+NORMATIVE for every PHI-bearing GET endpoint.
+
+### 12.1 `ReadGate<CMD, R>` — the single read contract
+
+`[REQUIRED]` Every PHI read goes through
+[`com.medcore.platform.read.ReadGate`][1]. Sister to
+`WriteGate`; same construction discipline (explicit bean
+wiring, `proxyBeanMethods = false`, one gate per command
+type).
+
+[1]: `apps/api/src/main/kotlin/com/medcore/platform/read/ReadGate.kt`
+
+`[REQUIRED]` Pipeline (5 steps, no bypass):
+1. Authorize — `ReadAuthzPolicy.check` throws
+   `WriteAuthorizationException` (reused) on deny.
+2. Open tx — `PROPAGATION_REQUIRED`. **NOT read-only**
+   (see §12.4).
+3. Pre-exec hook — `WriteTxHook` reused; for PHI reads wire
+   `PhiRlsTxHook` so both RLS GUCs are set.
+4. Execute — controller's handler lambda runs.
+5. Audit-success — `ReadAuditor.onSuccess` emits INSIDE
+   the tx; failure rolls back.
+
+Denial path does NOT open a tx; `ReadAuditor.onDenied` uses
+`JdbcAuditWriter`'s `PROPAGATION_REQUIRED` own-tx.
+
+### 12.2 `ReadAuthzPolicy<CMD>` + `ReadAuditor<CMD, R>`
+
+`[REQUIRED]` Sister interfaces with the same shape as their
+Write counterparts. Separate types for semantic clarity —
+readers of the code distinguish read-path from write-path
+at a glance.
+
+`[INCIDENTAL]` Kotlin type-aliases instead of separate
+interfaces. v1.2 chose separate interfaces; future revisions
+may consolidate if the duplication cost exceeds the clarity
+benefit.
+
+### 12.3 Emission discipline (NORMATIVE)
+
+`[REQUIRED]` `ReadAuditor.onSuccess` emits ONLY on actual
+disclosure — HTTP 200 with a body. The auditor MUST NOT
+emit when:
+
+- The resource was not found (404 path) — no disclosure,
+  flooding audit with misses is wrong-scoped.
+- The server errored (500) — application bug; the response
+  body is never serialised.
+
+`[REQUIRED]` Denial path emits `AUTHZ_READ_DENIED` (not the
+write counterpart). This is a distinct audit action —
+compliance filters rely on it to separate denied-read
+(information-disclosure intent) from denied-write
+(mutation intent).
+
+`[REQUIRED]` Filter-level denials (SUSPENDED / not-a-member)
+emit `tenancy.membership.denied` from `TenantContextFilter`
+(existing since 3B.1). They never reach the read gate and
+the gate's auditor MUST NOT emit in that path.
+
+### 12.4 Transaction: writable, not read-only
+
+`[REQUIRED]` The read-gate's transaction is writable
+(`PROPAGATION_REQUIRED`, NOT `readOnly = true`). Reason: the
+audit emission at step 5 is an INSERT into
+`audit.audit_event`; Postgres refuses INSERT under
+`SET TRANSACTION READ ONLY`. A read-only tx would break
+audit atomicity.
+
+`[REQUIRED]` Handler code MUST NOT perform writes.
+Enforcement:
+- V14+ RLS policies on PHI tables refuse writes from the
+  read role gate.
+- Future ArchUnit rule (CF-4A4-5) will forbid `save*` calls
+  from `.read` handler packages at compile time.
+
+### 12.5 Pattern symmetry: writes and reads co-exist in the
+same `*WriteConfig`
+
+`[INCIDENTAL]` 4A.4 kept the config class named
+`PatientWriteConfig` even though it now also declares
+`ReadGate` beans. A future rename to `PatientGateConfig`
+(operation-neutral) is a candidate for the
+`WriteContext`/`WriteTxHook` cleanup slice. Current choice
+minimises churn.
+
+### 12.6 Response envelope
+
+`[REQUIRED]` All API responses use
+`com.medcore.platform.api.ApiResponse<T>` — the single
+canonical envelope. No per-operation subtypes
+(`ReadResponse<T>`, `WriteResponse<T>`, etc. are forbidden
+by this rule). Wire shape: `{"data": {...}, "requestId": "..."}`.
+
+### 12.7 ArchUnit Rule 14
+
+`[REQUIRED]` `ReadGate.apply` is invoked ONLY from `..api..`
+(controllers) + `..read..` (test adjacency). Mirrors Rule 12
+for writes. Services, filters, policies, handlers MUST NOT
+open a second read entry point.
+
+### 12.8 §10 checklist additions (read endpoints)
+
+- [ ] `[REQUIRED]` Any new `AuditAction` entry for the read
+  (e.g., `CLINICAL_<RESOURCE>_ACCESSED`) with NORMATIVE
+  shape KDoc.
+- [ ] `[REQUIRED]` Read auditor emits ONLY on 200. Integration
+  tests assert no audit row on 404/500.
+- [ ] `[REQUIRED]` Policy denial emits `AUTHZ_READ_DENIED`
+  (not `AUTHZ_WRITE_DENIED`).
+- [ ] `[REQUIRED]` PHI log-leakage test covers the GET path
+  with distinctive synthetic tokens.
+- [ ] `[REQUIRED]` Cross-tenant id returns 404 (identical to
+  unknown id — no existence leak).
+
+### 12.9 Reference implementation
+
+- `com.medcore.clinical.patient.read.GetPatientCommand`
+- `com.medcore.clinical.patient.read.GetPatientPolicy`
+- `com.medcore.clinical.patient.read.GetPatientHandler`
+- `com.medcore.clinical.patient.read.GetPatientAuditor`
+- `com.medcore.clinical.patient.api.PatientController.getPatient`
+- `com.medcore.clinical.patient.write.PatientWriteConfig.getPatientGate`
+
+Tests:
+- `ReadGateTest` (pipeline unit coverage)
+- `GetPatientIntegrationTest` (HTTP→DB)
+- `PatientReadLogPhiLeakageTest` (PHI log discipline)
+- `ReadBoundaryArchTest` (Rule 14)

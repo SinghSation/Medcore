@@ -6,7 +6,7 @@ import com.medcore.platform.tenancy.MembershipStatus
 import com.medcore.platform.tenancy.TenantStatus
 import com.medcore.platform.write.WriteContext
 import com.medcore.platform.write.WriteGate
-import com.medcore.platform.write.WriteResponse
+import com.medcore.platform.api.ApiResponse
 import com.medcore.tenancy.service.MembershipDetail
 import com.medcore.tenancy.service.TenancyService
 import com.medcore.tenancy.service.TenantMembershipResult
@@ -112,7 +112,7 @@ class TenantsController(
         @PathVariable slug: String,
         @Valid @RequestBody body: UpdateTenantRequest,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): WriteResponse<TenantSummaryResponse> {
+    ): ApiResponse<TenantSummaryResponse> {
         val command = UpdateTenantDisplayNameCommand(
             slug = slug,
             // `!!` codifies the @Valid @NotBlank guarantee: if we reach
@@ -128,7 +128,7 @@ class TenantsController(
         val snapshot = updateTenantDisplayNameGate.apply(command, context) { cmd ->
             updateTenantDisplayNameHandler.handle(cmd)
         }
-        return WriteResponse(
+        return ApiResponse(
             data = TenantSummaryResponse.from(snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
@@ -158,7 +158,7 @@ class TenantsController(
         @PathVariable slug: String,
         @Valid @RequestBody body: InviteMembershipRequest,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): ResponseEntity<WriteResponse<MembershipResponse>> {
+    ): ResponseEntity<ApiResponse<MembershipResponse>> {
         val command = InviteTenantMembershipCommand(
             slug = slug,
             // `!!` codifies the @Valid @NotNull guarantee. If this
@@ -174,7 +174,7 @@ class TenantsController(
         val snapshot = inviteTenantMembershipGate.apply(command, context) { cmd ->
             inviteTenantMembershipHandler.handle(cmd)
         }
-        val responseBody = WriteResponse(
+        val responseBody = ApiResponse(
             data = MembershipResponse.from(snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
@@ -204,7 +204,7 @@ class TenantsController(
         @PathVariable membershipId: UUID,
         @Valid @RequestBody body: UpdateMembershipRoleRequest,
         @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
-    ): WriteResponse<MembershipResponse> {
+    ): ApiResponse<MembershipResponse> {
         val command = UpdateTenantMembershipRoleCommand(
             slug = slug,
             membershipId = membershipId,
@@ -217,7 +217,7 @@ class TenantsController(
         val result = updateTenantMembershipRoleGate.apply(command, context) { cmd ->
             updateTenantMembershipRoleHandler.handle(cmd, context)
         }
-        return WriteResponse(
+        return ApiResponse(
             data = MembershipResponse.from(result.snapshot),
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )

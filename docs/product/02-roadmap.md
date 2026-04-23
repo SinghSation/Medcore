@@ -977,13 +977,20 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | V14 `clinical.patient_identifier` RLS write policies missing OWNER/ADMIN role gate (surfaced by 4A.3 pattern-validation) | 4A.3 | **4A.3** (closed — V17 tightens INSERT/UPDATE/DELETE policies to match V14's patient-write role gate) |
 | Partial UNIQUE index on `clinical.patient_identifier` — `WHERE valid_to IS NULL` — to allow re-add-after-revoke verbatim | 4A.3 | when a pilot clinic's workflow demands re-add-after-revoke (extremely rare in practice) |
 | Identifier UPDATE command (value/issuer change without revoke-readd, distinct shape from 4A.3's POST+DELETE) | 4A.3 | 4A.3.1 or later, if operator correction workflow demands it |
+| GET /fhir/r4/Patient/{id} + US Core mapping | 4A.2 / 4A.4 | **4A.5** (next — reorder from 4A.4) |
+| Patient read endpoint + `CLINICAL_PATIENT_ACCESSED` audit infrastructure | 4A.2 / 4A.0 | **4A.4** (closed — ReadGate substrate + GET endpoint shipped) |
+| `If-None-Match` / 304 Not Modified for PHI GETs | 4A.4 | future slice if bandwidth matters |
+| Partial-read modes (summary vs full) on PHI reads with `mode:` audit reason token | 4A.4 | when clinical workflow demands summary-only reads |
+| Anomalous-404 detection using audit chain for probe detection | 4A.4 | future security tooling slice |
+| `GET /patients` list endpoint with pagination + search | 4A.4 | 4A.6 or later slice |
+| ArchUnit rule forbidding `save*`/`delete*` calls in `.read` handler packages (belt-and-braces over RLS) | 4A.4 | future hardening slice |
+| Cross-cutting rename of `WriteContext` + `WriteTxHook` to operation-neutral names | 4A.4 | cleanup slice when multiple read paths ship |
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.3 — first pattern reuse:
-identifier add + revoke through the `clinical-write-pattern`
-v1.0 baseline. V17 closes V14's identifier RLS role-gate gap
-surfaced by the pattern-validation exercise. Template amended
-to v1.1 with three non-breaking clarifications. 418/418 tests
-green). Next review: 2026-07-25 (quarterly). Review cadence
-aligned with competitive-landscape review cadence.*
+*Last reviewed: 2026-04-23 (Phase 4A.4 — first PHI READ endpoint:
+ReadGate substrate with audit-atomic 200-only emission +
+CLINICAL_PATIENT_ACCESSED / AUTHZ_READ_DENIED audit actions +
+WriteResponse→ApiResponse canonical envelope + ArchUnit Rule 14.
+Template amended to v1.2 with §12 "Read path". 434/434 tests
+green). Next review: 2026-07-25 (quarterly).*
