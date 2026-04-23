@@ -64,7 +64,7 @@ export function PatientListPage(): React.JSX.Element {
           </div>
         </header>
 
-        <Card>
+        <Card data-phi data-testid="patient-list-card">
           <CardHeader>
             <CardTitle>Patient list</CardTitle>
             <CardDescription>
@@ -113,9 +113,22 @@ export function PatientListPage(): React.JSX.Element {
                     {page.items.map((p) => (
                       <tr
                         key={p.id}
-                        className="hover:bg-accent/30 border-b last:border-b-0"
+                        className="hover:bg-accent/30 cursor-pointer border-b last:border-b-0"
+                        onClick={() =>
+                          navigate(
+                            `/tenants/${encodeURIComponent(slug!)}/patients/${encodeURIComponent(p.id)}`,
+                          )
+                        }
                       >
-                        <td className="py-2 pr-4 font-mono text-xs">{p.mrn}</td>
+                        <td className="py-2 pr-4 font-mono text-xs">
+                          <Link
+                            to={`/tenants/${encodeURIComponent(slug!)}/patients/${encodeURIComponent(p.id)}`}
+                            className="hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {p.mrn}
+                          </Link>
+                        </td>
                         <td className="py-2 pr-4 font-medium">{p.nameFamily}</td>
                         <td className="py-2 pr-4">{p.nameGiven}</td>
                         <td className="py-2 pr-4">{p.birthDate}</td>

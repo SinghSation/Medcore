@@ -47,3 +47,62 @@ export async function listPatients(
     },
   )
 }
+
+/**
+ * Full detail wire shape returned by
+ * `GET /api/v1/tenants/{slug}/patients/{patientId}` (Phase 4A.4).
+ *
+ * Superset of [PatientListItem]. Carries the full demographic
+ * surface plus audit-metadata fields. Rendered on the detail
+ * page. Frontend MUST NOT log these objects or persist them to
+ * browser storage (Rule 01, Rule 04).
+ */
+export type PatientStatus = 'ACTIVE' | 'MERGED' | 'DELETED'
+export type MrnSource = 'GENERATED' | 'IMPORTED'
+
+export interface PatientDetail {
+  id: string
+  tenantId: string
+  mrn: string
+  mrnSource: MrnSource
+
+  nameGiven: string
+  nameFamily: string
+  nameMiddle?: string
+  nameSuffix?: string
+  namePrefix?: string
+  preferredName?: string
+
+  birthDate: string
+  administrativeSex: 'male' | 'female' | 'other' | 'unknown'
+  sexAssignedAtBirth?: string
+  genderIdentityCode?: string
+  preferredLanguage?: string
+
+  status: PatientStatus
+  rowVersion: number
+
+  createdAt: string
+  updatedAt: string
+  createdBy: string
+  updatedBy: string
+}
+
+export interface GetPatientParams {
+  tenantSlug: string
+  patientId: string
+  signal?: AbortSignal
+}
+
+export async function getPatient(
+  params: GetPatientParams,
+): Promise<PatientDetail> {
+  const { tenantSlug, patientId, signal } = params
+  return apiFetch<PatientDetail>(
+    `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/patients/${encodeURIComponent(patientId)}`,
+    {
+      tenantSlug,
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  )
+}
