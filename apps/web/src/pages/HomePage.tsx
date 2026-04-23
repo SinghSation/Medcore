@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -96,19 +96,21 @@ export function HomePage(): React.JSX.Element {
             {tenants.data && tenants.data.length > 0 && (
               <ul className="flex flex-col gap-2">
                 {tenants.data.map((m) => (
-                  <li
-                    key={m.membershipId}
-                    className="flex items-center justify-between rounded-md border p-3"
-                  >
-                    <div>
-                      <div className="font-medium">{m.tenant.displayName}</div>
-                      <div className="text-muted-foreground font-mono text-xs">
-                        {m.tenant.slug}
+                  <li key={m.membershipId}>
+                    <Link
+                      to={`/tenants/${encodeURIComponent(m.tenant.slug)}/patients`}
+                      className="hover:bg-accent/40 flex items-center justify-between rounded-md border p-3 transition-colors"
+                    >
+                      <div>
+                        <div className="font-medium">{m.tenant.displayName}</div>
+                        <div className="text-muted-foreground font-mono text-xs">
+                          {m.tenant.slug}
+                        </div>
                       </div>
-                    </div>
-                    <span className="text-muted-foreground text-xs">
-                      {m.role}
-                    </span>
+                      <span className="text-muted-foreground text-xs">
+                        {m.role} · view patients →
+                      </span>
+                    </Link>
                   </li>
                 ))}
               </ul>

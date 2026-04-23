@@ -3,6 +3,7 @@ import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { ProtectedRoute } from '@/routes/ProtectedRoute'
 import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
+import { PatientListPage } from '@/pages/PatientListPage'
 
 const router = createBrowserRouter([
   {
@@ -14,6 +15,14 @@ const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <HomePage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/tenants/:slug/patients',
+    element: (
+      <ProtectedRoute>
+        <PatientListPage />
       </ProtectedRoute>
     ),
   },
