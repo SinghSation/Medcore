@@ -37,6 +37,10 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.MEMBERSHIP_INVITE,
         MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
         MedcoreAuthority.MEMBERSHIP_REMOVE,
+        // Patient (clinical) — full access (Phase 4A.1).
+        MedcoreAuthority.PATIENT_READ,
+        MedcoreAuthority.PATIENT_CREATE,
+        MedcoreAuthority.PATIENT_UPDATE,
     )
 
     val ADMIN_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -48,11 +52,22 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.MEMBERSHIP_INVITE,
         MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
         MedcoreAuthority.MEMBERSHIP_REMOVE,
+        // Patient (clinical) — full access (Phase 4A.1).
+        MedcoreAuthority.PATIENT_READ,
+        MedcoreAuthority.PATIENT_CREATE,
+        MedcoreAuthority.PATIENT_UPDATE,
     )
 
     val MEMBER_AUTHORITIES: Set<MedcoreAuthority> = setOf(
         MedcoreAuthority.TENANT_READ,
         MedcoreAuthority.MEMBERSHIP_READ,
+        // Patient (clinical) — READ only (Phase 4A.1).
+        // Documented simplification: a "billing-only staff" user
+        // who shouldn't see clinical records is mis-modeled here.
+        // Clinical role differentiation (CLINICIAN / NURSE /
+        // STAFF / BILLING) with finer PATIENT_* grants lands in
+        // a dedicated slice when a pilot clinic demands it.
+        MedcoreAuthority.PATIENT_READ,
     )
 
     private val MAPPING: Map<MembershipRole, Set<MedcoreAuthority>> = mapOf(

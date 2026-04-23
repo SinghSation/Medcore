@@ -57,6 +57,8 @@ class ChainVerifierTest {
     fun reset() {
         adminJdbc = JdbcTemplate(adminDataSource)
         adminJdbc.update("DELETE FROM audit.audit_event")
+        adminJdbc.update("DELETE FROM clinical.patient_identifier")
+        adminJdbc.update("DELETE FROM clinical.patient")
         adminJdbc.update("DELETE FROM tenancy.tenant_membership")
         adminJdbc.update("DELETE FROM tenancy.tenant")
         adminJdbc.update("DELETE FROM identity.\"user\"")

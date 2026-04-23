@@ -105,17 +105,18 @@ class FlywayMigrationStateCheck(private val dataSource: DataSource) {
          * every migration baked into this build's resources.
          *
          * Migration IDs in the `db/migration` tree:
-         *   V1..V13 at time of Phase 3J.N (V13 added the additive
-         *   admin-read policy on `tenancy.tenant_membership` that
-         *   the membership-management write flows need to pre-load
-         *   target rows). After V13 applies, the history table's
-         *   `installed_rank` reaches 13.
+         *   V1..V14 at time of Phase 4A.1 (V14 establishes the
+         *   clinical schema + `clinical.patient` + `patient_identifier`
+         *   + RLS policies keying on both tenant_id and user_id
+         *   GUCs + duplicate-detection-aware indexes + fuzzystrmatch
+         *   extension). After V14 applies, the history table's
+         *   `installed_rank` reaches 14.
          *
          * Bump this constant whenever a new VN migration lands (the
          * `safe-db-migration` skill in `.claude/skills/` carries this
          * as step N of the migration checklist).
          */
-        const val MIN_EXPECTED_INSTALLED_RANK: Int = 13
+        const val MIN_EXPECTED_INSTALLED_RANK: Int = 14
     }
 }
 

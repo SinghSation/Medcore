@@ -972,8 +972,9 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.0 — PHI RLS substrate
-shipped; closes 3J.2-opened PhiRlsTxHook carry-forward;
-unblocks 4A.1+ patient-module work). Next review: 2026-07-25
-(quarterly). Review cadence aligned with competitive-landscape
-review cadence.*
+*Last reviewed: 2026-04-23 (Phase 4A.1 — first PHI-bearing
+SQL surface: clinical.patient + clinical.patient_identifier +
+both-GUCs RLS + PATIENT_* authorities + JPA entities; no
+application reachability until 4A.2 wires the WriteGate
+perimeter). Next review: 2026-07-25 (quarterly). Review
+cadence aligned with competitive-landscape review cadence.*

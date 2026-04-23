@@ -26,8 +26,8 @@ class MedcoreApiApplicationTests {
     }
 
     @Test
-    fun `flyway provisions the four expected schemas`() {
-        val expected = setOf("flyway", "identity", "tenancy", "audit")
+    fun `flyway provisions the five expected schemas`() {
+        val expected = setOf("flyway", "identity", "tenancy", "audit", "clinical")
         val actual = mutableSetOf<String>()
         dataSource.connection.use { conn ->
             conn.createStatement().executeQuery(
@@ -81,6 +81,7 @@ class MedcoreApiApplicationTests {
                 Row("11", "V11__medcore_migrator_role.sql", true),
                 Row("12", "V12__tenancy_rls_write_policies.sql", true),
                 Row("13", "V13__tenancy_membership_rls_admin_read.sql", true),
+                Row("14", "V14__clinical_patient_schema.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

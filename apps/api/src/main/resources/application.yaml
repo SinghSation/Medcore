@@ -55,12 +55,14 @@ spring:
       - classpath:db/migration/identity
       - classpath:db/migration/tenancy
       - classpath:db/migration/audit
+      - classpath:db/migration/clinical
       - classpath:db/migration/flyway
     schemas:
       - flyway
       - identity
       - tenancy
       - audit
+      - clinical
     default-schema: flyway
     baseline-on-migrate: false
     validate-on-migrate: true

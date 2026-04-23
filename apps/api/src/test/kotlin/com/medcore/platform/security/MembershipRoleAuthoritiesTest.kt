@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
 class MembershipRoleAuthoritiesTest {
 
     @Test
-    fun `OWNER holds every tenancy authority including TENANT_DELETE`() {
+    fun `OWNER holds every tenancy + patient authority including TENANT_DELETE`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.OWNER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -22,6 +22,9 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.MEMBERSHIP_INVITE,
                 MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE,
                 MedcoreAuthority.MEMBERSHIP_REMOVE,
+                MedcoreAuthority.PATIENT_READ,
+                MedcoreAuthority.PATIENT_CREATE,
+                MedcoreAuthority.PATIENT_UPDATE,
             )
     }
 
@@ -35,15 +38,28 @@ class MembershipRoleAuthoritiesTest {
         // Both OWNER and ADMIN hold MEMBERSHIP_ROLE_UPDATE (Phase 3J.N);
         // role-vs-role escalation guards live in the policy layer.
         assertThat(admin).contains(MedcoreAuthority.MEMBERSHIP_ROLE_UPDATE)
+        // Both OWNER and ADMIN hold the three PATIENT_* authorities
+        // (Phase 4A.1). Clinical role differentiation is a future
+        // slice; until then, tenant admins manage patient data.
+        assertThat(admin).contains(MedcoreAuthority.PATIENT_CREATE)
+        assertThat(admin).contains(MedcoreAuthority.PATIENT_UPDATE)
     }
 
     @Test
-    fun `MEMBER holds only READ authorities`() {
+    fun `MEMBER holds READ authorities including PATIENT_READ but no patient writes`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.MEMBER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
                 MedcoreAuthority.MEMBERSHIP_READ,
+                // Documented simplification (Phase 4A.1): workforce
+                // members can see patients without being admins.
+                // Clinical role differentiation is a future slice.
+                MedcoreAuthority.PATIENT_READ,
             )
+        // Explicitly confirm MEMBER cannot mutate patient records.
+        val member = MembershipRoleAuthorities.forRole(MembershipRole.MEMBER)
+        assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_CREATE)
+        assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_UPDATE)
     }
 
     @Test

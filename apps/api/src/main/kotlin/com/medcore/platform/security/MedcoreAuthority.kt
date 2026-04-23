@@ -36,6 +36,18 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     MEMBERSHIP_ROLE_UPDATE("MEDCORE_MEMBERSHIP_ROLE_UPDATE"),
     MEMBERSHIP_REMOVE("MEDCORE_MEMBERSHIP_REMOVE"),
 
+    // --- Patient (clinical) authorities (Phase 4A.1) ---
+    // Role map (4A.1, documented simplification):
+    //   OWNER + ADMIN — all three (read/create/update)
+    //   MEMBER        — READ only
+    // Clinical role differentiation (CLINICIAN / NURSE / STAFF)
+    // with finer PATIENT_* grants is a dedicated future slice
+    // when a pilot clinic demands it. PATIENT_MERGE is reserved
+    // for the merge-workflow slice — NOT in 4A.1.
+    PATIENT_READ("MEDCORE_PATIENT_READ"),
+    PATIENT_CREATE("MEDCORE_PATIENT_CREATE"),
+    PATIENT_UPDATE("MEDCORE_PATIENT_UPDATE"),
+
     // --- System-scope (bootstrap, admin ops) ---
     /**
      * Reserved for bootstrap / admin operations that must bypass

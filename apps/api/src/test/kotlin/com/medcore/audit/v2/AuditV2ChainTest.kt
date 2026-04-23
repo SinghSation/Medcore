@@ -54,6 +54,8 @@ class AuditV2ChainTest {
     fun reset() {
         jdbc = JdbcTemplate(dataSource)
         jdbc.update("DELETE FROM audit.audit_event")
+        jdbc.update("DELETE FROM clinical.patient_identifier")
+        jdbc.update("DELETE FROM clinical.patient")
         jdbc.update("DELETE FROM tenancy.tenant_membership")
         jdbc.update("DELETE FROM tenancy.tenant")
         jdbc.update("DELETE FROM identity.\"user\"")

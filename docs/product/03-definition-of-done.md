@@ -1481,15 +1481,132 @@ substrate instead of inventing RLS-GUC plumbing per slice.
   `PhiContextPropagator` async helper is a future-phase
   note in the holder KDoc, not a ledger row (YAGNI).
 
-#### 3.8.2 Phase 4A.1+ — Patient schema + demographics + FHIR + history + merge
+#### 3.8.2 Phase 4A.1 — Patient schema (first PHI-bearing table)
+
+Medcore's first PHI-bearing SQL surface. Lands `clinical.patient`
++ `clinical.patient_identifier` + both-GUCs RLS policies +
+PATIENT_* authorities. **Ships zero application-level read/write
+access** — no service, no handler, no controller; the surface
+is dormant until 4A.2 wires the WriteGate perimeter.
+
+- [ ] `V14__clinical_patient_schema.sql` — `clinical` schema +
+      `clinical.patient` (22 columns, FHIR-aligned) +
+      `clinical.patient_identifier` satellite. `fuzzystrmatch`
+      extension enabled for phonetic indexing.
+- [ ] **Both-GUCs RLS** on both tables — every SELECT / INSERT
+      / UPDATE / DELETE policy keys on BOTH `app.current_tenant_id`
+      AND `app.current_user_id` via
+      `NULLIF(current_setting(..., true), '')::uuid`.
+      Missing either GUC fails closed.
+- [ ] **Role-gated writes** — INSERT / UPDATE / DELETE policies
+      require the caller's ACTIVE membership to carry
+      `role IN ('OWNER', 'ADMIN')` via a
+      `tenancy.tenant_membership` EXISTS subquery.
+- [ ] **Soft-delete hiding** — SELECT policy excludes
+      `status = 'DELETED'`. MERGED_AWAY stays visible (merge-
+      unwind workflow).
+- [ ] **Identifier transitivity** — `clinical.patient_identifier`
+      policies delegate visibility to the parent row via
+      `EXISTS (SELECT 1 FROM clinical.patient p WHERE p.id =
+      patient_identifier.patient_id)`. Subquery runs under
+      `p_patient_select`, so all parent-row gates inherit.
+- [ ] **Recursion analysis documented inline** in V14 —
+      subqueries terminate via V13's SECURITY DEFINER helper
+      (`medcore_rls_helper` BYPASSRLS) or V8's own-row policy.
+- [ ] **CHECK constraints, database-enforced** (not app-
+      enforced): `administrative_sex ∈ {male, female, other,
+      unknown}`, `status ∈ {ACTIVE, MERGED_AWAY, DELETED}`,
+      `mrn_source ∈ {GENERATED, IMPORTED}`,
+      `sex_assigned_at_birth ∈ {M, F, UNK}` (nullable),
+      `ck_clinical_patient_merged_fields_coherent` (merge
+      fields coherent with status), `patient_identifier.type ∈
+      {MRN_EXTERNAL, DRIVERS_LICENSE, INSURANCE_MEMBER, OTHER}`
+      — **SSN deliberately absent** (deferred to its own
+      compliance-review slice).
+- [ ] **UNIQUE (tenant_id, mrn)** — prevents duplicate Medcore-
+      minted MRNs within a tenant.
+- [ ] **Duplicate-detection-aware indexes** —
+      `(tenant_id, dob, lower(family), lower(given))` exact-
+      match index + `(tenant_id, soundex(family))` phonetic
+      index. Anticipates 4A.2's duplicate-warning handler
+      without extra migration work.
+- [ ] **TEXT + CHECK for every enum column** (NOT native
+      Postgres ENUM) — consistent with `tenant.status`,
+      `tenant_membership.role`, `tenant_membership.status`,
+      `audit_event.actor_type`, `audit_event.outcome`.
+      Migrating to native ENUMs is a cross-cutting normalization
+      slice with its own ADR if we ever do it.
+- [ ] **Kotlin model enums** (closed): `AdministrativeSex`
+      (wire values `male` / `female` / `other` / `unknown`),
+      `PatientStatus`, `MrnSource`, `PatientIdentifierType`.
+- [ ] **JPA entities** — `PatientEntity` + `PatientIdentifierEntity`.
+      Regular mutable classes (not `data class`),
+      `@Version`-annotated `row_version`, protected no-arg
+      constructor. `administrative_sex` stored as FHIR wire
+      value via a typed property accessor.
+- [ ] **Repositories** — `PatientRepository` +
+      `PatientIdentifierRepository`, both `JpaRepository<E, UUID>`
+      with zero query methods. **No application-code callers**
+      in 4A.1; consumers wire in 4A.2.
+- [ ] **`MedcoreAuthority` +3 entries**: `PATIENT_READ`,
+      `PATIENT_CREATE`, `PATIENT_UPDATE`. Wire strings
+      `MEDCORE_PATIENT_READ` / `..._CREATE` / `..._UPDATE`.
+      Registry-discipline pattern (ADR-005 §2.3) followed:
+      enum update + `MembershipRoleAuthorities` update +
+      `MembershipRoleAuthoritiesTest` update, all in the
+      same slice.
+- [ ] **Role map extension** — OWNER + ADMIN gain all three
+      PATIENT_* authorities; MEMBER gains `PATIENT_READ` only
+      (documented simplification — clinical role
+      differentiation is a future slice).
+- [ ] **`FlywayMigrationStateCheck.MIN_EXPECTED_INSTALLED_RANK`
+      bumped 13 → 14** so stale-schema deployments refuse to
+      start.
+- [ ] **`clinical` in Flyway scan path** — both
+      `application.yaml` and `flyway.conf` updated.
+- [ ] **ArchUnit Rule 13** — stays `.allowEmptyShould(true)`
+      (vacuously true in 4A.1 because no `..clinical..service..`
+      class exists yet). Allowance removed in 4A.2 when
+      `PatientService` lands.
+- [ ] **Tests (16 new in 4A.1)**:
+  - `PatientSchemaRlsTest` (10): missing-tenant-GUC closed,
+    missing-user-GUC closed, cross-tenant isolation,
+    SUSPENDED-member blind, DELETED excluded, non-member
+    blind across tenants, identifier transitivity, OWNER
+    INSERT success, MEMBER INSERT refused, cross-tenant
+    UPDATE silently zero rows.
+  - `PatientEntityMappingTest` (6): JPA roundtrip (patient),
+    JPA roundtrip (identifier), UNIQUE (tenant_id, mrn)
+    refused, CHECK administrative_sex refused,
+    CHECK status refused,
+    CHECK merged-fields-coherent refused.
+- [ ] **17 existing test resets updated** to wipe
+      `clinical.patient_identifier` + `clinical.patient` before
+      `tenancy.tenant_membership` (FK-dependency-order
+      cleanup). No behavioural change to any existing test.
+- [ ] **PHI-exposure review** — `docs/security/phi-exposure-
+      review-4a-1.md`. Risk determination: Low. First slice
+      that lands a PHI SQL surface; zero application
+      reachability until 4A.2.
+- [ ] Existing 342 tests still green; total after 4A.1:
+      **358/358 across 66 suites (+16)**.
+- [ ] Carry-forward closed in 4A.1: none (4A.1 closes no
+      prior carry-forward; it establishes the PHI substrate
+      that 4A.2+ consumes).
+- [ ] Carry-forward opened by 4A.1: none. (The ArchUnit Rule
+      13 `.allowEmptyShould(true)` allowance is a pre-existing
+      4A.0 note, tracked to close with 4A.2 — it is NOT a
+      4A.1 carry-forward.)
+
+#### 3.8.3 Phase 4A.2+ — Patient writes, reads, FHIR, history, merge
 
 <!-- TODO(content): populated as each 4A sub-slice opens:
-     - 4A.1: V14 migration (clinical.patient + RLS + authorities)
-     - 4A.2: CreatePatientCommand + UpdateDemographicsCommand
-       through WriteGate, duplicate-warning on create
+     - 4A.2: CreatePatientCommand + UpdatePatientDemographicsCommand
+       through WriteGate, duplicate-warning on create,
+       PatientService (closes ArchUnit Rule 13 allowance)
      - 4A.3: Address + contact append-only history
      - 4A.4: GET /fhir/r4/Patient/{id} + US Core mapping
-     - 4A.5: Read auditing (CLINICAL_PATIENT_ACCESSED)
+     - 4A.5: Read auditing (CLINICAL_PATIENT_ACCESSED action)
      - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
      - 4A.N: Merge workflow (dedicated slice) -->
 
@@ -1513,8 +1630,9 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.0 — PHI RLS substrate shipped
-with PhiRequestContextHolder/Filter + PhiSessionContext + PhiRlsTxHook
-+ ArchUnit Rule 13; closes 3J.2-opened PhiRlsTxHook carry-forward;
-342/342 across 64 suites). Next review: 2026-05-25, or on the next
-phase opening (whichever is sooner).*
+*Last reviewed: 2026-04-23 (Phase 4A.1 — first PHI-bearing SQL
+surface shipped: clinical.patient + clinical.patient_identifier
++ both-GUCs RLS + PATIENT_* authorities + JPA entities; no
+application reachability yet — WriteGate perimeter + service
+layer land in 4A.2. 358/358 across 66 suites). Next review:
+2026-05-25, or on the next phase opening (whichever is sooner).*
