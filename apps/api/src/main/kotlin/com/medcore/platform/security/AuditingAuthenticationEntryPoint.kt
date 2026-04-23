@@ -46,17 +46,47 @@ class AuditingAuthenticationEntryPoint(
         authException: AuthenticationException,
     ) {
         if (hasBearerToken(request)) {
+            // Phase 3K.1 (ADR-008 §2.6): distinguish the
+            // PrincipalStatusDeniedException path (Medcore rejected
+            // a cryptographically-valid token because the mapped
+            // user is DISABLED / DELETED) from the invalid-bearer
+            // path. The former carries the actorId for forensics;
+            // the latter is null because the token never resolved
+            // to an internal user.
+            val (actorId, reason) = when (val cause = findPrincipalStatusDenial(authException)) {
+                null -> null to REASON_INVALID_BEARER
+                else -> cause.actorId to cause.reasonCode
+            }
             auditWriter.write(
                 AuditEventCommand(
                     action = AuditAction.IDENTITY_USER_LOGIN_FAILURE,
                     actorType = ActorType.USER,
-                    actorId = null,
+                    actorId = actorId,
                     outcome = AuditOutcome.DENIED,
-                    reason = REASON_INVALID_BEARER,
+                    reason = reason,
                 ),
             )
         }
         delegate.commence(request, response, authException)
+    }
+
+    /**
+     * Unwraps the exception chain looking for a
+     * [PrincipalStatusDeniedException]. Spring Security's resource-
+     * server pipeline may re-wrap auth exceptions; walking the
+     * cause chain handles both direct propagation and wrapped
+     * cases consistently.
+     */
+    private fun findPrincipalStatusDenial(
+        ex: Throwable,
+    ): PrincipalStatusDeniedException? {
+        var current: Throwable? = ex
+        while (current != null) {
+            if (current is PrincipalStatusDeniedException) return current
+            if (current.cause === current) return null
+            current = current.cause
+        }
+        return null
     }
 
     private fun hasBearerToken(request: HttpServletRequest): Boolean {

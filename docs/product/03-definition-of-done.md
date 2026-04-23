@@ -1,7 +1,7 @@
 ---
 status: Active
 last_reviewed: 2026-04-23
-next_review: 2026-05-23
+next_review: 2026-05-24
 cadence: stable-amended-on-phase-close
 owner: Repository owner
 changelog:
@@ -1278,12 +1278,118 @@ are now unable to reach `main` without passing checks.
      - 3I.5: AWS Secrets Manager real implementation
      - 3I.6: Deploy-on-merge workflow -->
 
-### 3.6 Phases 3K, 3L, 3M
+### 3.6 Phase 3K — Production IdP decision + integration
+
+Phase 3K is split: 3K.1 locks the vendor + identity contract
+(governance-heavy, code-light); 3K.2 handles the concrete
+vendor integration in `dev` (deferred to 3I.4 AWS landing).
+
+#### 3.6.1 Phase 3K.1 — Identity contract + vendor ADR
+
+Closes the 3A.3 "Production IdP ADR" carry-forward. Locks the
+identity contract that Phase 4A (patient registry) depends on.
+
+- [ ] `ADR-008` landed with status Accepted. Names **WorkOS** as
+      the production workforce-identity broker.
+- [ ] ADR-008 §2.2 frames WorkOS as a **broker / orchestration
+      layer**, explicitly NOT Medcore's system of record. Medcore
+      retains authority over `identity.user.status`, tenancy,
+      audit linkage. Broker-swap is a one-file change to
+      `ClaimsNormalizer`, not a data migration.
+- [ ] ADR-008 §2.3 normative identity contract:
+      `userId = Medcore-internal UUID`, `(issuer, subject) =
+      external mapping`, `emailVerified=true` invariant,
+      `preferredUsername` display-only. Contract stable across
+      vendor swaps.
+- [ ] ADR-008 §2.4 claims-normalization posture:
+      `ClaimsNormalizer` is a **strict validator, not a
+      transformer** (WorkOS emits clean OIDC; no vendor-specific
+      remapping needed). Class exists as vendor-swap insurance.
+- [ ] ADR-008 §2.5 tenant-mapping via lookup (not token claim) —
+      locked.
+- [ ] ADR-008 §2.6 **Medcore `PrincipalStatus` is authoritative**
+      invariant. A cryptographically-valid token that maps to an
+      `identity.user` row with `status != ACTIVE` MUST be
+      rejected with 401 at the Medcore boundary. IdP-side
+      deactivation propagates via token expiry; un-expired
+      tokens are revoked at the Medcore layer.
+- [ ] ADR-008 §2.8 MFA delegated to IdP, trusted via `amr`
+      claim; no Medcore-side enforcement.
+- [ ] `ClaimsNormalizer` implemented:
+  - Validates `sub` present + non-blank
+  - Validates `iss` present + non-blank
+  - Validates `email_verified == true` when `email` present
+  - No claim-name remapping (WorkOS is clean OIDC)
+  - RFC 6750 compliance: error descriptions are ASCII-only
+    (no em-dash / smart-punctuation — Spring Security
+    rejects non-ASCII descriptions and falls back to the
+    generic "Invalid token" message).
+- [ ] `ClaimsNormalizer` wired into `MedcoreJwtAuthenticationConverter`
+      — runs BEFORE `PrincipalResolver.resolve(...)`.
+- [ ] `PrincipalStatusDeniedException` implemented:
+  - Subclass of Spring's `DisabledException` (→
+    `AuthenticationException` → 401)
+  - Carries `actorId: UUID` + closed-enum `reasonCode:
+    String` (`principal_disabled` | `principal_deleted`)
+  - Thrown by `IdentityProvisioningService.resolve` when
+    `entity.status != ACTIVE`
+  - Caught by `AuditingAuthenticationEntryPoint` via
+    cause-chain walk; emits `IDENTITY_USER_LOGIN_FAILURE`
+    with `actorId` + `reason` populated from the exception
+    (generic fallback reason stays `invalid_bearer_token`
+    for non-status denials).
+- [ ] No `IDENTITY_USER_LOGIN_SUCCESS` audit row emitted
+      for rejected non-ACTIVE principals — the success event
+      means "Medcore accepted the session," which we
+      explicitly did not.
+- [ ] `docs/runbooks/identity-idp.md` landed covering:
+  - Mental model (broker vs system of record) — first
+    paragraph, memorizable.
+  - Environment matrix (local mock / dev / staging / prod).
+  - Daily operations: disabling a user, deleting a user,
+    rotating broker credentials, onboarding enterprise SSO.
+  - Incident response: WorkOS outage, credential compromise,
+    suspected compromised token.
+  - Vendor-swap contingency playbook.
+  - Token inspection + common failures reference.
+  - Key files table (engineering reference).
+- [ ] Tests:
+  - `ClaimsNormalizerTest` (8 cases): happy path; missing
+    email (passes); missing sub; blank sub; email with
+    email_verified=false; email with email_verified missing;
+    blank email (treated as absent); exception-description
+    carries no PHI-shaped values (RFC 6750 ASCII-only).
+  - `PrincipalStatusEnforcementIntegrationTest` (4 cases):
+    ACTIVE baseline; DISABLED rejected with
+    `reason=principal_disabled` + correct `actor_id`;
+    DELETED rejected with `reason=principal_deleted`;
+    DISABLED rejection emits NO `login_success` audit.
+- [ ] Existing 314 tests still green; total after 3K.1:
+      **326/326 across 59 suites (+12)**.
+- [ ] Carry-forward closed in 3K.1:
+  - "Production IdP ADR" (3A.3 → 3K.1) — ADR-008 lands with
+    vendor + contract locked.
+- [ ] Carry-forward opened by 3K.1: none.
+  3K.2 (concrete WorkOS integration in `dev`) is deferred
+  as a separate sub-slice alongside 3I.4 AWS landing; it
+  continues under the original Phase 3K roadmap entry
+  without becoming a ledger carry-forward from 3K.1.
+
+#### 3.6.2 Phase 3K.2 — Concrete WorkOS integration in dev (deferred)
+
+<!-- TODO(content): populated when Phase 3I.4 AWS substrate
+     lands. Scope: Terraform WorkOS workspace config, application
+     `application-dev.yaml` pointing at the dev WorkOS issuer,
+     MFA-required policy assertion test, role-to-WorkOS-group
+     mapping if needed (currently tenancy role is entirely
+     Medcore-side so likely no mapping required). -->
+
+### 3.7 Phases 3L, 3M
 
 <!-- TODO(content): per-phase checklists populated as each phase opens
      per ADR-005 §2.4 (living-per-slice cadence). -->
 
-### 3.7 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.8 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
@@ -1303,9 +1409,8 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 3I.2 CI enforcement DoD
-populated — three parallel gates in .github/workflows/ci.yml
-(test / governance / secret-scan); closes the 3G
-"field-names-only in validation details" carry-forward indirectly
-via CI-runs-ArchUnit-plus-PHI-leakage-tests). Next review:
-2026-05-23, or on the next phase opening (whichever is sooner).*
+*Last reviewed: 2026-04-23 (Phase 3K.1 — ADR-008 locks WorkOS as
+broker + normative identity contract + Medcore-PrincipalStatus-
+authoritative invariant; ClaimsNormalizer strict-validator shipped;
+closes 3A.3 "Production IdP ADR" carry-forward). Next review:
+2026-05-24, or on the next phase opening (whichever is sooner).*

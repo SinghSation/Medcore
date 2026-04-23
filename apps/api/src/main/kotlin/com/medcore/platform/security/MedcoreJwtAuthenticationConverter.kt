@@ -21,14 +21,20 @@ import org.springframework.security.oauth2.jwt.Jwt
 class MedcoreJwtAuthenticationConverter(
     private val oidcProperties: MedcoreOidcProperties,
     private val principalResolver: PrincipalResolver,
+    private val claimsNormalizer: ClaimsNormalizer,
 ) : Converter<Jwt, AbstractAuthenticationToken> {
 
     override fun convert(jwt: Jwt): AbstractAuthenticationToken {
+        // Phase 3K.1, ADR-008 §2: strict OIDC validation of broker-
+        // issued tokens BEFORE we build a MedcorePrincipal from them.
+        // Normalizer throws InvalidBearerTokenException on failure
+        // (→ 401 via Spring Security).
+        claimsNormalizer.validate(jwt)
+
         val claims = oidcProperties.claims
-        val subject = jwt.getClaimAsString(claims.subject)
-            ?: throw IllegalStateException("JWT is missing the '${claims.subject}' claim after validation")
-        val issuer = jwt.issuer?.toString()
-            ?: throw IllegalStateException("JWT is missing 'iss' after validation")
+        // Normalizer has guaranteed sub + iss are present and non-blank.
+        val subject = jwt.getClaimAsString(claims.subject)!!
+        val issuer = jwt.issuer!!.toString()
 
         val principal = principalResolver.resolve(
             PrincipalResolutionCommand(

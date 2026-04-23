@@ -1,7 +1,7 @@
 ---
 status: Active
 last_reviewed: 2026-04-23
-next_review: 2026-07-23
+next_review: 2026-07-24
 cadence: living-per-slice
 owner: Repository owner
 ---
@@ -949,7 +949,7 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | Concurrent first-login retry | 3A.3 | **4A** (patient-create adjacency) |
 | Role → authority mapping | 3A.3 | **3J** |
 | Generated `packages/api-client` | 3A.3 | **3L** |
-| Production IdP ADR | 3A.3 | **3K** |
+| Production IdP ADR | 3A.3 | **3K.1** (closed — ADR-008 locks WorkOS + identity contract + Medcore-status-authoritative invariant) |
 | RLS policies for tenancy writes | 3D | **3J** (closed in 3J.1 via V12) |
 | Per-tenant chain sharding | 3D | evaluated at **5A** (may stay deferred) |
 | Chain verification endpoint / scheduled job | 3D | **3F** (job) + **3J** (operator surface) |
@@ -972,9 +972,8 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 3I.2 CI-enforcement slice —
-three parallel gates in .github/workflows/ci.yml ensure
-ArchUnit + migration + trailer + doc-staleness + secret-scan
-cannot be bypassed at merge). Next review: 2026-07-23
-(quarterly). Review cadence aligned with competitive-landscape
-review cadence.*
+*Last reviewed: 2026-04-23 (Phase 3K.1 — ADR-008 locks WorkOS
+as production workforce-identity broker + normative identity
+contract; closes 3A.3 "Production IdP ADR" carry-forward).
+Next review: 2026-07-24 (quarterly). Review cadence aligned
+with competitive-landscape review cadence.*

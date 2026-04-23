@@ -10,6 +10,7 @@ import com.medcore.platform.security.MedcorePrincipal
 import com.medcore.platform.security.PrincipalResolutionCommand
 import com.medcore.platform.security.PrincipalResolver
 import com.medcore.platform.security.PrincipalStatus
+import com.medcore.platform.security.PrincipalStatusDeniedException
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -92,6 +93,34 @@ class IdentityProvisioningService(
                 ),
             )
         }
+
+        // Phase 3K.1 (ADR-008 §2.6) — Medcore's PrincipalStatus is
+        // authoritative. A cryptographically-valid token that maps
+        // to a DISABLED or DELETED user is rejected at the auth
+        // boundary. IdP-side deactivation propagates via token
+        // expiry; existing un-expired tokens are revoked HERE.
+        //
+        // Throws PrincipalStatusDeniedException (extends
+        // Spring's DisabledException → 401 via the auth entry
+        // point). No IDENTITY_USER_LOGIN_SUCCESS emitted for
+        // non-ACTIVE principals — "login success" means "Medcore
+        // accepted the session," which we explicitly did not.
+        // IDENTITY_USER_LOGIN_FAILURE is emitted by the auth
+        // entry point with the carried actorId + reasonCode.
+        when (entity.status) {
+            IdentityUserStatus.DISABLED ->
+                throw PrincipalStatusDeniedException(
+                    actorId = entity.id,
+                    reasonCode = PrincipalStatusDeniedException.REASON_DISABLED,
+                )
+            IdentityUserStatus.DELETED ->
+                throw PrincipalStatusDeniedException(
+                    actorId = entity.id,
+                    reasonCode = PrincipalStatusDeniedException.REASON_DELETED,
+                )
+            IdentityUserStatus.ACTIVE -> Unit  // fall through to success path
+        }
+
         auditWriter.write(
             AuditEventCommand(
                 action = AuditAction.IDENTITY_USER_LOGIN_SUCCESS,

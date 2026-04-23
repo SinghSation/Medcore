@@ -60,8 +60,9 @@ class SecurityConfig {
     fun medcoreJwtAuthenticationConverter(
         oidcProperties: MedcoreOidcProperties,
         principalResolver: PrincipalResolver,
+        claimsNormalizer: ClaimsNormalizer,
     ): MedcoreJwtAuthenticationConverter =
-        MedcoreJwtAuthenticationConverter(oidcProperties, principalResolver)
+        MedcoreJwtAuthenticationConverter(oidcProperties, principalResolver, claimsNormalizer)
 
     @Bean
     fun medcoreAuthenticationEntryPoint(objectMapper: ObjectMapper): MedcoreAuthenticationEntryPoint =
