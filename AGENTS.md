@@ -122,6 +122,44 @@ MUST be rejected by CI and by reviewers, regardless of urgency.
 3. All services MUST emit structured logs, metrics, and traces using the
    shared observability conventions (see `.cursor/rules/06-audit-observability.mdc`).
 
+### 3.7 Naming Conventions
+
+Naming is a cross-tool invariant. See
+[`.cursor/rules/07-naming-conventions.mdc`](./.cursor/rules/07-naming-conventions.mdc)
+for the authoritative ruleset. Key points — binding on all agents:
+
+1. **Packages are domain-first, behavior-second.**
+   `<domain>/<resource>/<behavior>/` (e.g., `clinical/patient/read/`).
+   Domain roots are closed: `clinical`, `identity`, `tenancy`, `platform`.
+   New top-level roots REQUIRE an ADR.
+2. **Backend class suffixes are load-bearing.** `*Command`, `*Handler`,
+   `*Policy`, `*Validator`, `*Auditor`, `*Snapshot`, `*Result`,
+   `*Request`, `*Response`, `*Config`, `*Gate`, `*Hook`, `*Filter`,
+   `*Repository`, `*Entity`, `*Exception`. One class per suffix role.
+   For each command, the full stack shares the `<Verb><Resource>`
+   prefix (e.g., `ListPatientsCommand` + `ListPatientsHandler` +
+   `ListPatientsPolicy` + `ListPatientsAuditor`).
+3. **Frontend components and modules:** `*Page`, `*Provider`, `*Route`
+   (PascalCase + suffix); `*.ts` library modules under `src/lib/` in
+   kebab-case; shadcn/ui primitives in lowercase.
+4. **Authorities:** `RESOURCE_ACTION` uppercase, singular resource,
+   imperative verb. Examples: `PATIENT_READ`, `MEMBERSHIP_INVITE`.
+5. **Audit actions:** Java enum in `SCREAMING_SNAKE_CASE` + persisted
+   `code` in `dot.separated.lowercase`. Prefix families are closed:
+   `identity`, `tenancy`, `clinical`, `authz`, `audit.chain`. New
+   families REQUIRE an ADR.
+6. **Reason slugs:** pipe-delimited, first token
+   `intent:<domain>.<resource>.<action>`; additional tokens are
+   `key:value` with closed-enum or bounded-integer values only.
+   Free text in reasons is prohibited.
+7. **Enforcement is forward-only.** New files MUST comply. Legacy
+   names stay as-is unless a file is already being edited for other
+   reasons. Retroactive rename campaigns are forbidden.
+
+Reviewers and agents cite Rule 07 for the full catalog; this §3.7 is
+the binding summary that every agent MUST treat as cross-tool
+canonical governance.
+
 ---
 
 ## 4. Agent Operating Procedures
