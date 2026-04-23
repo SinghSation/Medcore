@@ -5,6 +5,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { HomePage } from '@/pages/HomePage'
 import { PatientListPage } from '@/pages/PatientListPage'
 import { PatientDetailPage } from '@/pages/PatientDetailPage'
+import { EncounterDetailPage } from '@/pages/EncounterDetailPage'
 
 const router = createBrowserRouter([
   {
@@ -32,6 +33,14 @@ const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <PatientDetailPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/tenants/:slug/encounters/:encounterId',
+    element: (
+      <ProtectedRoute>
+        <EncounterDetailPage />
       </ProtectedRoute>
     ),
   },

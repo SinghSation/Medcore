@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -10,6 +11,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { ApiError } from '@/lib/api-client'
+import { startEncounter } from '@/lib/encounters'
 import { getPatient, type PatientDetail } from '@/lib/patients'
 import { useAuth } from '@/providers/AuthProvider'
 
@@ -34,6 +36,31 @@ export function PatientDetailPage(): React.JSX.Element {
     navigate('/login', { replace: true })
   }
 
+  const [startError, setStartError] = useState<string | null>(null)
+  const startMutation = useMutation({
+    mutationFn: () =>
+      startEncounter({
+        tenantSlug: slug!,
+        patientId: patientId!,
+        encounterClass: 'AMB',
+      }),
+    onSuccess: (encounter) => {
+      navigate(`/tenants/${slug}/encounters/${encounter.id}`)
+    },
+    onError: (err) => {
+      setStartError(
+        err instanceof ApiError && err.status === 403
+          ? 'You do not have authority to start encounters on this tenant.'
+          : 'Could not start encounter. Try again.',
+      )
+    },
+  })
+
+  function onStartEncounter(): void {
+    setStartError(null)
+    startMutation.mutate()
+  }
+
   const notFound = query.isError && isNotFound(query.error)
   const patient = query.data
 
@@ -48,6 +75,15 @@ export function PatientDetailPage(): React.JSX.Element {
             </p>
           </div>
           <div className="flex gap-2">
+            {patient && (
+              <Button
+                onClick={onStartEncounter}
+                disabled={startMutation.isPending || startMutation.isSuccess}
+                data-testid="start-encounter-button"
+              >
+                {startMutation.isPending ? 'Starting…' : 'Start encounter'}
+              </Button>
+            )}
             <Button variant="outline" asChild>
               <Link to={`/tenants/${slug}/patients`}>Back to list</Link>
             </Button>
@@ -56,6 +92,15 @@ export function PatientDetailPage(): React.JSX.Element {
             </Button>
           </div>
         </header>
+        {startError !== null && (
+          <div
+            role="alert"
+            className="text-destructive text-sm"
+            data-testid="start-encounter-error"
+          >
+            {startError}
+          </div>
+        )}
 
         {query.isLoading && (
           <Card>
