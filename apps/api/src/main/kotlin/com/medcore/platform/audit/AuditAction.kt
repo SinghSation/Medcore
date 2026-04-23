@@ -329,6 +329,55 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_PATIENT_LIST_ACCESSED("clinical.patient.list_accessed"),
 
+    // --- Phase 4C.1: encounter shell (VS1 Chunk D) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/patients/{patientId}/encounters`
+     * when an OWNER/ADMIN starts a new encounter (Phase 4C.1).
+     *
+     * First encounter write audit action in Medcore.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.StartEncounterAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.encounter"`
+     *   - `resource_id`   = newly-minted encounter UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.start|class:AMB"`
+     *
+     * **No PHI in the reason slug.** Patient UUID is NOT embedded
+     * (the patient is the subject, but its identity is recorded
+     * through the encounter's own FK; forensic join via
+     * `resource_id` → `clinical.encounter.patient_id`). `class`
+     * is a closed-enum token.
+     *
+     * No no-op suppression: start is always a persisted INSERT.
+     */
+    CLINICAL_ENCOUNTER_STARTED("clinical.encounter.started"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/encounters/{encounterId}` when
+     * the caller successfully reads an encounter (Phase 4C.1).
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.read.GetEncounterAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = disclosed encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter"`
+     *   - `resource_id`   = disclosed encounter UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.access"`
+     *
+     * Emission discipline mirrors `CLINICAL_PATIENT_ACCESSED`:
+     * emit on 200; do NOT emit on 404 or 500; denial path uses
+     * [AUTHZ_READ_DENIED]; runs INSIDE the ReadGate transaction.
+     */
+    CLINICAL_ENCOUNTER_ACCESSED("clinical.encounter.accessed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

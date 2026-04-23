@@ -41,6 +41,9 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.PATIENT_READ,
         MedcoreAuthority.PATIENT_CREATE,
         MedcoreAuthority.PATIENT_UPDATE,
+        // Encounter (clinical) — full access (Phase 4C.1).
+        MedcoreAuthority.ENCOUNTER_READ,
+        MedcoreAuthority.ENCOUNTER_WRITE,
     )
 
     val ADMIN_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -56,6 +59,9 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.PATIENT_READ,
         MedcoreAuthority.PATIENT_CREATE,
         MedcoreAuthority.PATIENT_UPDATE,
+        // Encounter (clinical) — full access (Phase 4C.1).
+        MedcoreAuthority.ENCOUNTER_READ,
+        MedcoreAuthority.ENCOUNTER_WRITE,
     )
 
     val MEMBER_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -68,6 +74,8 @@ object MembershipRoleAuthorities {
         // STAFF / BILLING) with finer PATIENT_* grants lands in
         // a dedicated slice when a pilot clinic demands it.
         MedcoreAuthority.PATIENT_READ,
+        // Encounter (clinical) — READ only (Phase 4C.1).
+        MedcoreAuthority.ENCOUNTER_READ,
     )
 
     private val MAPPING: Map<MembershipRole, Set<MedcoreAuthority>> = mapOf(

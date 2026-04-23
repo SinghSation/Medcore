@@ -48,6 +48,17 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     PATIENT_CREATE("MEDCORE_PATIENT_CREATE"),
     PATIENT_UPDATE("MEDCORE_PATIENT_UPDATE"),
 
+    // --- Encounter (clinical) authorities (Phase 4C.1, VS1 Chunk D) ---
+    // Role map (4C.1, documented simplification):
+    //   OWNER + ADMIN — ENCOUNTER_READ + ENCOUNTER_WRITE
+    //   MEMBER        — ENCOUNTER_READ only
+    // Deliberately coarse. State-transitions (FINISHED / CANCELLED)
+    // and provider-attribution grants are future Phase 4C slices
+    // that may split ENCOUNTER_WRITE into CREATE / UPDATE / FINISH
+    // / CANCEL at that time.
+    ENCOUNTER_READ("MEDCORE_ENCOUNTER_READ"),
+    ENCOUNTER_WRITE("MEDCORE_ENCOUNTER_WRITE"),
+
     // --- System-scope (bootstrap, admin ops) ---
     /**
      * Reserved for bootstrap / admin operations that must bypass

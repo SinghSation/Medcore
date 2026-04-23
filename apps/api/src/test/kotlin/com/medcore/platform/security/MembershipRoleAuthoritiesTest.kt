@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
 class MembershipRoleAuthoritiesTest {
 
     @Test
-    fun `OWNER holds every tenancy + patient authority including TENANT_DELETE`() {
+    fun `OWNER holds every tenancy + patient + encounter authority including TENANT_DELETE`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.OWNER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -25,6 +25,8 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.PATIENT_READ,
                 MedcoreAuthority.PATIENT_CREATE,
                 MedcoreAuthority.PATIENT_UPDATE,
+                MedcoreAuthority.ENCOUNTER_READ,
+                MedcoreAuthority.ENCOUNTER_WRITE,
             )
     }
 
@@ -46,7 +48,7 @@ class MembershipRoleAuthoritiesTest {
     }
 
     @Test
-    fun `MEMBER holds READ authorities including PATIENT_READ but no patient writes`() {
+    fun `MEMBER holds READ authorities including PATIENT_READ + ENCOUNTER_READ but no writes`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.MEMBER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -55,11 +57,15 @@ class MembershipRoleAuthoritiesTest {
                 // members can see patients without being admins.
                 // Clinical role differentiation is a future slice.
                 MedcoreAuthority.PATIENT_READ,
+                // Phase 4C.1: read-only access to encounters.
+                MedcoreAuthority.ENCOUNTER_READ,
             )
-        // Explicitly confirm MEMBER cannot mutate patient records.
+        // Explicitly confirm MEMBER cannot mutate patient or
+        // encounter records.
         val member = MembershipRoleAuthorities.forRole(MembershipRole.MEMBER)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_CREATE)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_UPDATE)
+        assertThat(member).doesNotContain(MedcoreAuthority.ENCOUNTER_WRITE)
     }
 
     @Test

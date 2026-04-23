@@ -1,0 +1,97 @@
+package com.medcore.clinical.encounter.api
+
+import com.fasterxml.jackson.annotation.JsonInclude
+import com.medcore.clinical.encounter.model.EncounterClass
+import com.medcore.clinical.encounter.model.EncounterStatus
+import com.medcore.clinical.encounter.write.EncounterSnapshot
+import com.medcore.clinical.encounter.write.StartEncounterCommand
+import com.medcore.platform.write.WriteValidationException
+import jakarta.validation.constraints.NotNull
+import java.time.Instant
+import java.util.UUID
+
+// ============================================================================
+// POST /api/v1/tenants/{slug}/patients/{patientId}/encounters — start request
+// ============================================================================
+
+/**
+ * HTTP DTO for
+ * `POST /api/v1/tenants/{slug}/patients/{patientId}/encounters`
+ * (Phase 4C.1, VS1 Chunk D).
+ *
+ * `encounterClass` on the wire is the closed-enum name (`"AMB"`).
+ * Unknown values throw [WriteValidationException] →
+ * 422 `request.validation_failed|format`.
+ */
+data class StartEncounterRequest(
+    @field:NotNull
+    val encounterClass: String?,
+) {
+    fun toCommand(slug: String, patientId: UUID): StartEncounterCommand {
+        val rawClass = encounterClass
+            ?: throw WriteValidationException(
+                field = "encounterClass",
+                code = "required",
+            )
+        val parsedClass = try {
+            enumValueOf<EncounterClass>(rawClass)
+        } catch (ex: IllegalArgumentException) {
+            throw WriteValidationException(
+                field = "encounterClass",
+                code = "format",
+                cause = ex,
+            )
+        }
+        return StartEncounterCommand(
+            slug = slug,
+            patientId = patientId,
+            encounterClass = parsedClass,
+        )
+    }
+}
+
+// ============================================================================
+// Response DTO
+// ============================================================================
+
+/**
+ * Wire shape for encounter start + read responses
+ * (Phase 4C.1, VS1 Chunk D).
+ *
+ * Mirrors [EncounterSnapshot] with enum NAMEs on the wire.
+ * `@JsonInclude(NON_NULL)` omits nullable lifecycle timestamps
+ * (`startedAt`, `finishedAt`) from the wire when unset — FHIR
+ * cardinality semantics.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class EncounterResponse(
+    val id: UUID,
+    val tenantId: UUID,
+    val patientId: UUID,
+    val status: EncounterStatus,
+    val encounterClass: EncounterClass,
+    val startedAt: Instant?,
+    val finishedAt: Instant?,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+    val createdBy: UUID,
+    val updatedBy: UUID,
+    val rowVersion: Long,
+) {
+    companion object {
+        fun from(snapshot: EncounterSnapshot): EncounterResponse = EncounterResponse(
+            id = snapshot.id,
+            tenantId = snapshot.tenantId,
+            patientId = snapshot.patientId,
+            status = snapshot.status,
+            encounterClass = snapshot.encounterClass,
+            startedAt = snapshot.startedAt,
+            finishedAt = snapshot.finishedAt,
+            createdAt = snapshot.createdAt,
+            updatedAt = snapshot.updatedAt,
+            createdBy = snapshot.createdBy,
+            updatedBy = snapshot.updatedBy,
+            rowVersion = snapshot.rowVersion,
+        )
+    }
+}
