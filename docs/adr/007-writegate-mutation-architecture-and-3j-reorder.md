@@ -232,9 +232,18 @@ Without the hook, every write to an RLS-protected table reads zero
 rows in the handler (RLS filters everything). This was discovered
 during 3J.2 integration testing — the first end-to-end success
 path returned 404 rather than 200. The fix is in the platform
-layer so every future mutation inherits the correct behaviour;
-future PHI writes (Phase 4A+) will wire a companion
-`PhiRlsTxHook` that additionally sets `app.current_tenant_id`.
+layer so every future mutation inherits the correct behaviour.
+
+**Phase 4A.0 added `PhiRlsTxHook`** as the PHI-aware companion.
+It additionally sets `app.current_tenant_id` (patient-layer RLS
+policies from Phase 4A.1+ key on both GUCs directly), delegates
+to `PhiSessionContext.applyFromRequest()` which reads from a
+ThreadLocal-backed `PhiRequestContextHolder` populated by
+`PhiRequestContextFilter`. `TenancyRlsTxHook` continues to serve
+tenancy-scope writes; `PhiRlsTxHook` serves PHI-scope writes.
+See 4A.0 for the full substrate (filter ordering, finally-block
+clearing, partial-context rejection, ArchUnit Rule 13 for
+clinical-service discipline).
 
 ### 2.12 Last-OWNER invariant (first aggregate-state rule) — Phase 3J.N
 
@@ -477,6 +486,22 @@ slices close them deliberately rather than by drift.
   shape-only in 3J; the first command that must be retry-safe
   (Phase 4A+ patient-create adjacency, Phase 6A Stripe webhooks)
   drives the persistence model + replay semantics behind an ADR.
+
+### 7.2 Carry-forwards closed since 3J.1
+
+- **`PhiRlsTxHook` sibling for `app.current_tenant_id`** (3J.2 →
+  **4A.0**, CLOSED). Implemented in 4A.0 alongside
+  `PhiSessionContext`, `PhiRequestContext`,
+  `PhiRequestContextHolder` (ThreadLocal-backed),
+  `PhiRequestContextFilter` (with finally-block clearing +
+  ordering contract after auth + after TenantContextFilter +
+  before controller dispatch), and `PhiContextMissingException`
+  for loud-failure semantics. ArchUnit Rule 13 enforces that
+  clinical-service classes depend on `PhiSessionContext` so
+  `@Transactional` clinical methods cannot forget
+  `applyFromRequest()`. See Phase 4A.0 DoD + the PhiRls KDocs
+  for full contract. This closes the oldest WriteGate-layer
+  carry-forward and unblocks 4A.1+ patient-module work.
 
 ## 8. Acceptance
 

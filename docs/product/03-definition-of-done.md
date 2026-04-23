@@ -1,7 +1,7 @@
 ---
 status: Active
 last_reviewed: 2026-04-23
-next_review: 2026-05-24
+next_review: 2026-05-25
 cadence: stable-amended-on-phase-close
 owner: Repository owner
 changelog:
@@ -1389,7 +1389,111 @@ identity contract that Phase 4A (patient registry) depends on.
 <!-- TODO(content): per-phase checklists populated as each phase opens
      per ADR-005 §2.4 (living-per-slice cadence). -->
 
-### 3.8 Phases 4A–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.8 Phase 4A — Patient registry
+
+Phase 4A is the first clinical module and the first PHI-bearing
+surface in Medcore. Split into multiple sub-slices per the 4A
+design review pack (see conversation record / ADR-007 addenda).
+
+#### 3.8.1 Phase 4A.0 — PHI RLS substrate
+
+Closes the 3J.2-opened `PhiRlsTxHook` carry-forward. Ships the
+framework + tests + ArchUnit discipline before any clinical
+schema / endpoint lands, so 4A.1+ services inherit a stable
+substrate instead of inventing RLS-GUC plumbing per slice.
+
+- [ ] `PhiRequestContext(userId: UUID, tenantId: UUID)` data
+      class — both fields non-nullable, partial-context
+      structurally impossible.
+- [ ] `PhiRequestContextHolder` — ThreadLocal-backed holder
+      (NOT request-scoped Spring bean). Rationale: explicit
+      set/clear lifecycle, MDC-compatible async-propagation
+      story documented in KDoc for future slices.
+- [ ] `PhiRequestContextFilter` — Spring filter with NORMATIVE
+      ordering contract: runs AFTER Spring Security auth, AFTER
+      TenantContextFilter, BEFORE any controller dispatch, BEFORE
+      any `@Transactional` boundary. Registered at
+      `SecurityProperties.DEFAULT_FILTER_ORDER + 20`. No-op for
+      non-`/api/` paths (via `shouldNotFilter`). No-op when
+      either principal or tenant context is missing (partial
+      context rejected structurally).
+- [ ] **Filter uses `try { ... } finally { holder.clear() }`**
+      (refinement #1) — holder cleared unconditionally even
+      when the chain throws. Prevents ThreadLocal leak to the
+      next pooled request thread.
+- [ ] `PhiSessionContext.applyFromRequest()` — bridges the
+      holder to `TenancySessionContext` (which sets
+      `app.current_user_id` + `app.current_tenant_id` via SET
+      LOCAL). THROWS `PhiContextMissingException` if holder is
+      empty. NEVER silently no-ops (refinement #3). Must be
+      called inside an active transaction; propagates the
+      underlying `IllegalStateException` if not.
+- [ ] `PhiContextMissingException` extends `RuntimeException`;
+      Phase 3G's `onUncaught` handler maps to 500
+      `server.error`. Message logged but never echoed to the
+      response body.
+- [ ] `PhiRlsTxHook` — [WriteTxHook] implementation delegating
+      to `PhiSessionContext.applyFromRequest()`. Registered as
+      a `@Component`; future PHI write gates wire this via
+      their `@Bean` construction instead of the tenancy-scope
+      `TenancyRlsTxHook`.
+- [ ] `TenancyRlsTxHook` KDoc updated to describe its
+      relationship with the new PHI-aware sibling. No
+      behavioural change to tenancy-scope writes.
+- [ ] **ArchUnit Rule 13** (`ClinicalDisciplineArchTest`): every
+      class in `com.medcore.clinical..service` MUST depend on
+      `PhiSessionContext`. Vacuously true in 4A.0 (rule uses
+      `.allowEmptyShould(true)` with KDoc explaining that the
+      allowance is removed once 4A.1's patient service lands).
+- [ ] **Async-propagation documentation** (refinement #5):
+      `PhiRequestContextHolder` KDoc explicitly states that
+      ThreadLocal does NOT propagate to async threads; future
+      async execution must snapshot on the dispatching thread
+      and restore on the worker thread (MDC pattern).
+      Placeholder for future `PhiContextPropagator` utility
+      when the first async-PHI path lands.
+- [ ] **No clinical schema, no migration, no endpoints** —
+      4A.0 is pure platform substrate. Patient table lands in
+      4A.1.
+- [ ] Tests (16):
+  - `PhiRequestContextHolderTest` (4): empty/set/clear/thread-
+    isolation.
+  - `PhiSessionContextTest` (3): GUCs set inside tx; empty
+    holder throws PhiContextMissingException; no-tx throws
+    underlying IllegalStateException.
+  - `PhiRequestContextFilterTest` (6): happy path populates +
+    clears; no principal no-op; anonymous principal no-op;
+    partial-context (no tenant) no-op; non-api path bypassed;
+    holder cleared even when chain throws.
+  - `PhiRlsTxHookTest` (2): sets both GUCs via WriteGate tx;
+    empty holder throws.
+  - `ClinicalDisciplineArchTest` (1): Rule 13 vacuously true
+    in 4A.0.
+- [ ] Existing 326 tests still green; total after 4A.0:
+      **342/342 across 64 suites (+16)**.
+- [ ] ADR-007 §7.2 added: `PhiRlsTxHook` sibling carry-forward
+      CLOSED in 4A.0. ADR-007 §2.11 updated to describe both
+      hooks (tenancy-scope vs PHI-scope).
+- [ ] Carry-forward closed in 4A.0:
+  - `PhiRlsTxHook` sibling for `app.current_tenant_id`
+    (3J.2 → 4A.0)
+- [ ] Carry-forward opened by 4A.0: none.
+  `PhiContextPropagator` async helper is a future-phase
+  note in the holder KDoc, not a ledger row (YAGNI).
+
+#### 3.8.2 Phase 4A.1+ — Patient schema + demographics + FHIR + history + merge
+
+<!-- TODO(content): populated as each 4A sub-slice opens:
+     - 4A.1: V14 migration (clinical.patient + RLS + authorities)
+     - 4A.2: CreatePatientCommand + UpdateDemographicsCommand
+       through WriteGate, duplicate-warning on create
+     - 4A.3: Address + contact append-only history
+     - 4A.4: GET /fhir/r4/Patient/{id} + US Core mapping
+     - 4A.5: Read auditing (CLINICAL_PATIENT_ACCESSED)
+     - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
+     - 4A.N: Merge workflow (dedicated slice) -->
+
+### 3.9 Phases 4B–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
@@ -1409,8 +1513,8 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 3K.1 — ADR-008 locks WorkOS as
-broker + normative identity contract + Medcore-PrincipalStatus-
-authoritative invariant; ClaimsNormalizer strict-validator shipped;
-closes 3A.3 "Production IdP ADR" carry-forward). Next review:
-2026-05-24, or on the next phase opening (whichever is sooner).*
+*Last reviewed: 2026-04-23 (Phase 4A.0 — PHI RLS substrate shipped
+with PhiRequestContextHolder/Filter + PhiSessionContext + PhiRlsTxHook
++ ArchUnit Rule 13; closes 3J.2-opened PhiRlsTxHook carry-forward;
+342/342 across 64 suites). Next review: 2026-05-25, or on the next
+phase opening (whichever is sooner).*

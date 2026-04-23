@@ -1,7 +1,7 @@
 ---
 status: Active
 last_reviewed: 2026-04-23
-next_review: 2026-07-24
+next_review: 2026-07-25
 cadence: living-per-slice
 owner: Repository owner
 ---
@@ -962,7 +962,7 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | Audit payload column / structured mutation diff (before/after) | 3J.2 | **Phase 7** (compliance-driven ADR) |
 | `If-Match` precondition header on PATCH | 3J.2 | **3J.N or 3L** (when a client demands it) |
 | ArchUnit rule: WriteGate is exclusive mutation entry point | 3J.2 | **3I.1** (closed — 12 rules landed) |
-| `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A** (first PHI write) |
+| `PhiRlsTxHook` sibling that sets `app.current_tenant_id` | 3J.2 | **4A.0** (closed — full PHI RLS substrate shipped: PhiRequestContextHolder + Filter + SessionContext + RlsTxHook + ArchUnit Rule 13) |
 | `MEMBERSHIP_ROLE_UPDATE` authority + promote/demote endpoint | 3J.3 | **3J.N** (closed) |
 | `DELETE /memberships/{id}` member-removal endpoint | 3J.3 | **3J.N** (closed) |
 | Custom JSON deserialiser for `MembershipRole` that maps invalid values to 422 (not 400) | 3J.3 | future minor hardening slice |
@@ -972,8 +972,8 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 3K.1 — ADR-008 locks WorkOS
-as production workforce-identity broker + normative identity
-contract; closes 3A.3 "Production IdP ADR" carry-forward).
-Next review: 2026-07-24 (quarterly). Review cadence aligned
-with competitive-landscape review cadence.*
+*Last reviewed: 2026-04-23 (Phase 4A.0 — PHI RLS substrate
+shipped; closes 3J.2-opened PhiRlsTxHook carry-forward;
+unblocks 4A.1+ patient-module work). Next review: 2026-07-25
+(quarterly). Review cadence aligned with competitive-landscape
+review cadence.*

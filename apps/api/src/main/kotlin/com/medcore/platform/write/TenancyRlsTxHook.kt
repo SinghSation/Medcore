@@ -15,20 +15,21 @@ import org.springframework.stereotype.Component
  * mutations appear to "fail with 404" even when authorization
  * passed.
  *
- * Every Medcore mutation that touches an RLS-protected table (i.e.,
- * every tenancy write; in Phase 4+ every PHI-bearing write) wires
- * this hook into its [WriteGate] construction (see
- * `TenantWriteConfig`).
+ * Every **tenancy-scope** Medcore mutation wires this hook into
+ * its [WriteGate] construction (see `TenantWriteConfig`). PHI-
+ * scope mutations (Phase 4A+) wire [PhiRlsTxHook] instead, which
+ * ALSO sets `app.current_tenant_id` — patient-layer RLS policies
+ * key on both GUCs directly.
  *
  * ### Why this is platform/write/, not tenancy/
  *
  * RLS is a cross-cutting platform concern — every module that
- * mutates tenant-scoped or patient-scoped data needs the same
- * GUC set. Lifting the hook to the write-framework layer avoids
- * each module duplicating the same four lines. If a future
- * module has mutation needs that don't involve RLS (e.g., a
- * reference-data loader that runs as `medcore_migrator` via
- * SECURITY DEFINER), it constructs its WriteGate without this
+ * mutates tenant-scoped or patient-scoped data needs a GUC-
+ * setting hook. Lifting the hooks to the write-framework layer
+ * avoids each module duplicating the same infrastructure. If a
+ * future module has mutation needs that don't involve RLS
+ * (e.g., a reference-data loader that runs as `medcore_migrator`
+ * via SECURITY DEFINER), it constructs its WriteGate without a
  * hook.
  */
 @Component
