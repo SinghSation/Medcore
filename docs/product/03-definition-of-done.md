@@ -1,7 +1,7 @@
 ---
 status: Active
-last_reviewed: 2026-04-22
-next_review: 2026-05-22
+last_reviewed: 2026-04-23
+next_review: 2026-05-23
 cadence: stable-amended-on-phase-close
 owner: Repository owner
 changelog:
@@ -1183,14 +1183,98 @@ the mutation perimeter, module boundaries, or audit discipline.
       allow-list items are narrow + KDoc-documented, not
       future-scope carry-forwards).
 
-#### 3.5.2 Phase 3I.2+ — CI pipeline + Terraform + deployment
+#### 3.5.2 Phase 3I.2 — CI enforcement
+
+Machine-enforces the governance + security disciplines from
+ADR-005 (product framework + Tier 3 contract), ADR-007 (mutation
+perimeter via 3I.1 ArchUnit rules), and the PHI-leakage
+disciplines from 3F/3G. Combined with 3I.1's ArchUnit rules, CI
+becomes the merge-time gate: rules that 3I.1 established locally
+are now unable to reach `main` without passing checks.
+
+- [ ] `.github/workflows/ci.yml` defines three parallel jobs:
+  - `test (gradle + ArchUnit + migrations)` — runs
+    `./gradlew test --console=plain --no-daemon` in `apps/api`.
+    Covers unit tests, integration tests, 3I.1 ArchUnit rules,
+    and Flyway migration validation (implicit via
+    Testcontainers applying V1–V13 per test-class startup).
+  - `governance (trailer + doc-staleness)` — iterates the PR
+    commit range (`github.event.pull_request.base.sha` …
+    `github.event.pull_request.head.sha`; push events use
+    `github.event.before` … `github.sha`) and verifies:
+    (a) every commit body carries a non-empty `Roadmap-Phase:`
+    trailer (ADR-005 §2.5, AGENTS.md §4.7.3); (b) no
+    `docs/product/*.md` file has a passed `next_review:` date
+    without a `Review-Deferred:<reason>` trailer elsewhere in
+    the PR.
+  - `secret-scan (gitleaks)` — downloads the Gitleaks binary
+    (license-free, no paid action dependency) and runs
+    `gitleaks detect --source . --redact` against the working
+    tree + full git history.
+- [ ] Trailer check uses **PR base/head SHAs** (not
+      `origin/main..HEAD`) so it works correctly in rebased +
+      squash-merged flows. Push-to-main uses
+      `github.event.before..github.sha` for belt-and-braces
+      enforcement; first-push edge case (zero-SHA base)
+      short-circuits to pass.
+- [ ] Doc-staleness check requires `Review-Deferred:` to carry
+      a **non-empty reason** (ADR-005 §2.5 refinement). Empty
+      deferrals are rejected — the reason makes the deferral
+      reviewable in git history.
+- [ ] Gitleaks runs as a binary invocation (not the paid GitHub
+      Action). Pinned to v8.21.0 in the workflow. `--redact`
+      replaces matched secrets in CI logs with `[REDACTED]` so
+      log retention doesn't re-leak them.
+- [ ] Test-job failure uploads `apps/api/build/reports/tests/`
+      as an artifact with 7-day retention (debugging aid for
+      integration-test failures that require the HTML report).
+- [ ] Each gate has an actionable `::error::` message pointing
+      the contributor at the remediation path in
+      `docs/runbooks/ci-cd.md`.
+- [ ] `docs/runbooks/ci-cd.md` landed covering:
+  - Gate overview + failure interpretation per job
+  - Branch-protection configuration (step-by-step, user-owned
+    one-time setup in GitHub repo settings)
+  - Editing-the-workflow governance (Tier 3 rules apply)
+  - Cost + performance footprint
+  - Escalation path for infra outages + override discipline
+  - Future-extensions section (3I.2.b ktlint/detekt, 3I.3+)
+- [ ] Local smoke-test verified before push:
+  - Gitleaks v8.21.0 clean on current repo history + working
+    tree (0 findings).
+  - Python doc-staleness logic: 0 stale files across
+    `docs/product/*.md` (all 7 within review window).
+  - Trailer check: every commit in last-5 range carries
+    non-empty `Roadmap-Phase:`.
+- [ ] Branch-protection config step documented as **user-owned
+      one-time UI action**. Not automated — bootstrapping
+      secrets-to-enforce-secrets is circular; GitHub UI is the
+      correct control plane.
+- [ ] Test count unchanged: no application tests added (this
+      slice is workflow + governance infra). Full suite still
+      **314/314 across 57 suites** from 3I.1.
+- [ ] Carry-forward closed in 3I.2:
+  - `CI invariant: field-names-only in validation details`
+    (3G → 3I.2) — covered indirectly: the 3I.1 ArchUnit rules
+    + gradle test (which runs `ErrorResponsePhiLeakageTest`
+    from 3G) now enforce the field-names-only discipline
+    every PR. No separate CI rule needed.
+- [ ] Carry-forward opened by 3I.2: none; future 3I sub-slices
+      (3I.2.b ktlint/detekt, 3I.3 Dockerfile, 3I.4 Terraform,
+      3I.5 AWS Secrets, 3I.6 deploy workflow) remain tracked
+      under the original 3I entry.
+
+#### 3.5.3 Phase 3I.2.b — ktlint + detekt (deferred)
+
+<!-- TODO(content): populated when code-style rigor becomes a
+     priority. Baseline-file curation on first-pass is the
+     main scope risk; do as a dedicated slice. -->
+
+#### 3.5.4 Phase 3I.3+ — Dockerfile / Terraform / deployment (deferred)
 
 <!-- TODO(content): populated as each 3I sub-slice opens:
-     - 3I.2: GitHub Actions with gradle test / ktlintCheck /
-       detekt / Flyway validate / Gitleaks / Roadmap-Phase
-       trailer check / doc-staleness check
      - 3I.3: Dockerfile + build-info plugin
-     - 3I.4: Terraform dev environment
+     - 3I.4: Terraform dev environment (VPC, ECS, RDS, S3, IAM)
      - 3I.5: AWS Secrets Manager real implementation
      - 3I.6: Deploy-on-merge workflow -->
 
@@ -1219,10 +1303,9 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3I.1 ArchUnit DoD populated —
-12 machine-enforced rules across mutation boundary, module
-boundaries, and audit/security discipline; closes the 3J.2
-review-gated WriteGate-exclusivity carry-forward; ADR-007 §2.10
-updated from review-gated to machine-enforced).
-Next review: 2026-05-22, or on the next phase opening (whichever
-is sooner).*
+*Last reviewed: 2026-04-23 (Phase 3I.2 CI enforcement DoD
+populated — three parallel gates in .github/workflows/ci.yml
+(test / governance / secret-scan); closes the 3G
+"field-names-only in validation details" carry-forward indirectly
+via CI-runs-ArchUnit-plus-PHI-leakage-tests). Next review:
+2026-05-23, or on the next phase opening (whichever is sooner).*

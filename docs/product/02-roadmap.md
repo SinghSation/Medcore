@@ -1,7 +1,7 @@
 ---
 status: Active
-last_reviewed: 2026-04-22
-next_review: 2026-07-22
+last_reviewed: 2026-04-23
+next_review: 2026-07-23
 cadence: living-per-slice
 owner: Repository owner
 ---
@@ -972,7 +972,9 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-22 (Phase 3I.1 ArchUnit slice — closes
-the 3J.2 WriteGate-exclusivity carry-forward into 12 CI-enforced
-rules). Next review: 2026-07-22 (quarterly). Review cadence
-aligned with competitive-landscape review cadence.*
+*Last reviewed: 2026-04-23 (Phase 3I.2 CI-enforcement slice —
+three parallel gates in .github/workflows/ci.yml ensure
+ArchUnit + migration + trailer + doc-staleness + secret-scan
+cannot be bypassed at merge). Next review: 2026-07-23
+(quarterly). Review cadence aligned with competitive-landscape
+review cadence.*

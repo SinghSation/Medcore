@@ -1,0 +1,255 @@
+# Phase 3I.2 — Continuous-integration gates.
+#
+# Three parallel jobs enforce the architectural / governance /
+# security disciplines established across Phases 3F, 3G, 3J, and
+# 3I.1. Branch-protection rules (configured in GitHub repo
+# settings → Branches) must require all three jobs to pass before
+# a PR can merge — see docs/runbooks/ci-cd.md for the setup steps.
+#
+# Gate matrix:
+#   test         -- ./gradlew test (includes 3I.1 ArchUnit rules
+#                   + Flyway migration validation via
+#                   Testcontainers; a failing architectural
+#                   invariant or a broken migration fails the
+#                   build).
+#   governance   -- Roadmap-Phase trailer on every commit in the
+#                   PR range (ADR-005 §2.5); doc-staleness check
+#                   with Review-Deferred:<reason> escape hatch.
+#   secret-scan  -- Gitleaks scans working tree + git history for
+#                   leaked secret patterns. License-free binary
+#                   invocation (no paid action dependency).
+#
+# Cross-cutting design decisions:
+#   - pull_request events use github.event.pull_request.base.sha
+#     / head.sha explicitly (more robust than `origin/main..HEAD`
+#     in rebases + squash-merge flows).
+#   - push events to main use github.event.before..github.sha so
+#     the gates still enforce on direct pushes (belt-and-braces
+#     for cases where branch protection is not yet on).
+#   - Testcontainers runs out-of-the-box on ubuntu-latest; no
+#     custom Docker setup required.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: test (gradle + ArchUnit + migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so governance job can resolve the PR
+          # commit range. Test job inherits the same checkout
+          # policy for consistency.
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run gradle test
+        working-directory: apps/api
+        run: ./gradlew test --console=plain --no-daemon
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: apps/api/build/reports/tests/
+          retention-days: 7
+
+  governance:
+    name: governance (trailer + doc-staleness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Need full history to iterate the PR commit range.
+          fetch-depth: 0
+
+      - name: Resolve commit range
+        id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+            HEAD="$PR_HEAD_SHA"
+          else
+            BASE="$PUSH_BEFORE"
+            HEAD="$PUSH_AFTER"
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Commit range: $BASE..$HEAD"
+
+      - name: Check Roadmap-Phase trailer on every commit
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          set -euo pipefail
+          # First-push edge case: `github.event.before` is the
+          # zero-SHA when the branch is being pushed for the
+          # first time (e.g., initial repo setup). Nothing to
+          # compare against; skip gracefully.
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "First push on branch (no base) — skipping trailer check"
+            exit 0
+          fi
+
+          # Roadmap-Phase must be present AND non-empty on every
+          # commit body in the range. ADR-005 §2.5 + AGENTS.md §4.7.3.
+          missing=""
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            body="$(git show -s --format=%B "$sha")"
+            if ! printf '%s\n' "$body" | grep -qE '^Roadmap-Phase:[[:space:]]+\S'; then
+              subject="$(git show -s --format=%s "$sha")"
+              missing="${missing}  - ${sha:0:12} — ${subject}"$'\n'
+            fi
+          done < <(git log --format='%H' "$BASE..$HEAD")
+
+          if [ -n "$missing" ]; then
+            echo "::error::The following commits are missing a non-empty Roadmap-Phase trailer:"
+            printf '%s' "$missing"
+            echo ""
+            echo "Every commit body MUST include a line like:"
+            echo "  Roadmap-Phase: 3I.2 (CI enforcement)"
+            echo ""
+            echo "See ADR-005 §2.5 and AGENTS.md §4.7.3 for the full rule."
+            exit 1
+          fi
+
+          echo "All commits in range carry a Roadmap-Phase trailer."
+
+      - name: Check doc staleness
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+          HEAD: ${{ steps.range.outputs.head }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "First push on branch (no base) — skipping doc-staleness check"
+            exit 0
+          fi
+          python3 << 'PYEOF'
+          import os, re, subprocess, sys
+          from datetime import date
+
+          PRODUCT_DIR = "docs/product"
+          today = date.today()
+          stale = []
+
+          for fname in sorted(os.listdir(PRODUCT_DIR)):
+              if not fname.endswith(".md"):
+                  continue
+              path = os.path.join(PRODUCT_DIR, fname)
+              with open(path, encoding="utf-8") as f:
+                  content = f.read()
+              m = re.match(r'^---\n(.*?)\n---', content, re.DOTALL)
+              if not m:
+                  continue
+              fm = m.group(1)
+              nr = re.search(r'^\s*next_review:\s*(\d{4}-\d{2}-\d{2})', fm, re.MULTILINE)
+              if not nr:
+                  continue
+              try:
+                  nr_date = date.fromisoformat(nr.group(1))
+              except ValueError:
+                  continue
+              if nr_date < today:
+                  stale.append((path, nr_date))
+
+          if not stale:
+              print("All docs/product/ files are within their review window.")
+              sys.exit(0)
+
+          base = os.environ["BASE"]
+          head = os.environ["HEAD"]
+          log_out = subprocess.check_output(
+              ["git", "log", "--format=%B%n__COMMIT_END__", f"{base}..{head}"],
+              text=True,
+          )
+          # Review-Deferred MUST carry a non-empty reason. Empty
+          # escape hatches become permanent loopholes (ADR-005
+          # §2.5 pressure-test refinement).
+          deferred = bool(re.search(r'^Review-Deferred:\s+\S', log_out, re.MULTILINE))
+
+          if deferred:
+              print(f"Doc staleness detected in {len(stale)} file(s); Review-Deferred trailer with reason found — OK.")
+              for path, d in stale:
+                  print(f"  - {path}: next_review was {d}")
+              sys.exit(0)
+
+          print("::error::The following docs/product/ files have passed next_review dates:")
+          for path, d in stale:
+              print(f"  - {path}: next_review was {d}")
+          print("")
+          print("To proceed, EITHER update the next_review date in the affected file(s),")
+          print("OR add a trailer to a commit in this PR of the form:")
+          print("  Review-Deferred: <non-empty reason why the review is deferred>")
+          print("")
+          print("Empty Review-Deferred lines are rejected — the reason must be present")
+          print("so the deferral is reviewable in git history.")
+          sys.exit(1)
+          PYEOF
+
+  secret-scan:
+    name: secret-scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Scan full history, not just the latest commit — a
+          # secret that was pushed and later "removed" is still
+          # visible to anyone who clones the repo, so the
+          # appropriate remediation is rotate-and-rewrite, not
+          # delete-and-forget. Gitleaks scanning full history
+          # surfaces such secrets.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.21.0
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar xz gitleaks
+          chmod +x gitleaks
+          ./gitleaks version
+
+      - name: Run gitleaks
+        run: |
+          set -euo pipefail
+          # --source: scan working directory + git history
+          # --redact: replace matched secrets in output with
+          #           [REDACTED] so CI logs don't re-leak the
+          #           credential (even if the repo is later made
+          #           private, logs may persist in GitHub Actions
+          #           retention).
+          # --verbose: per-match detail for remediation
+          # Exit code: non-zero if any secret found → job fails.
+          ./gitleaks detect --source . --redact --verbose
