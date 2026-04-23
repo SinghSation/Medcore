@@ -973,13 +973,17 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | Rate-limiting on duplicate-patient-warning endpoint (enumeration mitigation on top of authority + minimal-disclosure gates) | 4A.2 | future hardening slice when abuse observed |
 | IMPORTED MRN path + collision-retry loop against `uq_clinical_patient_tenant_mrn` | 4A.2 | when a pilot clinic with legacy data demands it |
 | Real `Idempotency-Key` dedupe persistence + replay (shape-only since 3J.1; patient-create is the first consumer that could drive this) | 3J.1 / 4A.2 | **4A.2.1 hardening slice or 6A Stripe-webhook flow** |
+| Identifier management as a separate clinical slice | 4A.2 | **4A.3** (closed — patient identifier add/revoke shipped) |
+| V14 `clinical.patient_identifier` RLS write policies missing OWNER/ADMIN role gate (surfaced by 4A.3 pattern-validation) | 4A.3 | **4A.3** (closed — V17 tightens INSERT/UPDATE/DELETE policies to match V14's patient-write role gate) |
+| Partial UNIQUE index on `clinical.patient_identifier` — `WHERE valid_to IS NULL` — to allow re-add-after-revoke verbatim | 4A.3 | when a pilot clinic's workflow demands re-add-after-revoke (extremely rare in practice) |
+| Identifier UPDATE command (value/issuer change without revoke-readd, distinct shape from 4A.3's POST+DELETE) | 4A.3 | 4A.3.1 or later, if operator correction workflow demands it |
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.2 — first REAL PHI write
-path: POST + PATCH /patients through WriteGate + PhiRlsTxHook;
-V15 per-tenant MRN counter with atomic upsert + rollback
-safety; V16 fuzzystrmatch relocation for runtime phonetic
-duplicate detection; ArchUnit Rule 13 activated; 390/390
-tests green). Next review: 2026-07-25 (quarterly). Review
-cadence aligned with competitive-landscape review cadence.*
+*Last reviewed: 2026-04-23 (Phase 4A.3 — first pattern reuse:
+identifier add + revoke through the `clinical-write-pattern`
+v1.0 baseline. V17 closes V14's identifier RLS role-gate gap
+surfaced by the pattern-validation exercise. Template amended
+to v1.1 with three non-breaking clarifications. 418/418 tests
+green). Next review: 2026-07-25 (quarterly). Review cadence
+aligned with competitive-landscape review cadence.*

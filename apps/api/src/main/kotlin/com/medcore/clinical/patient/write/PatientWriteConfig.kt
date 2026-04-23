@@ -52,4 +52,40 @@ class PatientWriteConfig {
             validator = validator,
             txHook = phiRlsTxHook,
         )
+
+    // --- Phase 4A.3: patient identifier satellite writes ---
+
+    @Bean
+    fun addPatientIdentifierGate(
+        policy: AddPatientIdentifierPolicy,
+        auditor: AddPatientIdentifierAuditor,
+        validator: AddPatientIdentifierValidator,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<AddPatientIdentifierCommand, PatientIdentifierSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = validator,
+            txHook = phiRlsTxHook,
+        )
+
+    @Bean
+    fun revokePatientIdentifierGate(
+        policy: RevokePatientIdentifierPolicy,
+        auditor: RevokePatientIdentifierAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<RevokePatientIdentifierCommand, PatientIdentifierSnapshot> =
+        // No validator — DELETE has no body, and the path variable's
+        // UUID format is enforced by @PathVariable binding. Precedent
+        // from 3J.N's revokeTenantMembershipGate.
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = null,
+            txHook = phiRlsTxHook,
+        )
 }

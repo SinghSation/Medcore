@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.NullNode
 import com.medcore.clinical.patient.model.AdministrativeSex
 import com.medcore.clinical.patient.model.MrnSource
+import com.medcore.clinical.patient.model.PatientIdentifierType
 import com.medcore.clinical.patient.model.PatientStatus
+import com.medcore.clinical.patient.write.AddPatientIdentifierCommand
 import com.medcore.clinical.patient.write.CreatePatientCommand
 import com.medcore.clinical.patient.write.Patchable
+import com.medcore.clinical.patient.write.PatientIdentifierSnapshot
 import com.medcore.clinical.patient.write.PatientSnapshot
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsCommand
 import com.medcore.platform.write.WriteValidationException
@@ -257,5 +260,112 @@ data class PatientResponse(
             createdBy = snapshot.createdBy,
             updatedBy = snapshot.updatedBy,
         )
+    }
+}
+
+// ============================================================================
+// Phase 4A.3 — patient identifier satellite (add + revoke)
+// ============================================================================
+
+/**
+ * HTTP DTO for
+ * `POST /api/v1/tenants/{slug}/patients/{patientId}/identifiers`
+ * (Phase 4A.3).
+ *
+ * Bean Validation handles `@NotNull` / `@NotBlank`;
+ * [com.medcore.clinical.patient.write.AddPatientIdentifierValidator]
+ * runs the domain checks (post-trim emptiness, control chars,
+ * length caps, valid_range coherence).
+ *
+ * ### `type` coercion
+ *
+ * `type` is sent as the closed-enum wire name
+ * (`MRN_EXTERNAL` / `DRIVERS_LICENSE` / `INSURANCE_MEMBER` /
+ * `OTHER`). [toCommand] resolves via `enumValueOf<PatientIdentifierType>`;
+ * an unknown value throws [WriteValidationException]
+ * `field=type code=format` → 422.
+ *
+ * ### PHI
+ *
+ * `value` is PHI for DL / Insurance types. Never logged —
+ * enforced by [com.medcore.clinical.patient.api.PatientIdentifierLogPhiLeakageTest].
+ */
+data class AddPatientIdentifierRequest(
+    @field:NotBlank
+    val type: String?,
+
+    @field:NotBlank
+    val issuer: String?,
+
+    @field:NotBlank
+    val value: String?,
+
+    val validFrom: Instant? = null,
+    val validTo: Instant? = null,
+) {
+    fun toCommand(slug: String, patientId: UUID): AddPatientIdentifierCommand {
+        val rawType = type
+            ?: throw WriteValidationException(field = "type", code = "required")
+        val parsedType = try {
+            enumValueOf<PatientIdentifierType>(rawType)
+        } catch (ex: IllegalArgumentException) {
+            throw WriteValidationException(field = "type", code = "format", cause = ex)
+        }
+        return AddPatientIdentifierCommand(
+            slug = slug,
+            patientId = patientId,
+            type = parsedType,
+            issuer = issuer!!,
+            value = value!!,
+            validFrom = validFrom,
+            validTo = validTo,
+        )
+    }
+}
+
+/**
+ * Response DTO for identifier endpoints (Phase 4A.3).
+ *
+ * Mirrors [PatientIdentifierSnapshot] with one wire-shaping
+ * adjustment: [type] emits the closed-enum NAME (uppercase) —
+ * the canonical wire form matching [PatientIdentifierType].
+ * This is consistent with 3J.N's `role` field on membership
+ * responses (closed-enum names, uppercase).
+ *
+ * `@JsonInclude(NON_NULL)` omits `validFrom` / `validTo` when
+ * the identifier has no explicit validity window.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class PatientIdentifierResponse(
+    val id: UUID,
+    val patientId: UUID,
+    val tenantId: UUID,
+
+    val type: PatientIdentifierType,
+    val issuer: String,
+    val value: String,
+
+    val validFrom: Instant?,
+    val validTo: Instant?,
+
+    val createdAt: Instant,
+    val updatedAt: Instant,
+    val rowVersion: Long,
+) {
+    companion object {
+        fun from(snapshot: PatientIdentifierSnapshot): PatientIdentifierResponse =
+            PatientIdentifierResponse(
+                id = snapshot.id,
+                patientId = snapshot.patientId,
+                tenantId = snapshot.tenantId,
+                type = snapshot.type,
+                issuer = snapshot.issuer,
+                value = snapshot.value,
+                validFrom = snapshot.validFrom,
+                validTo = snapshot.validTo,
+                createdAt = snapshot.createdAt,
+                updatedAt = snapshot.updatedAt,
+                rowVersion = snapshot.rowVersion,
+            )
     }
 }

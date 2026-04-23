@@ -337,6 +337,78 @@ class PatientSchemaRlsTest {
             .isEqualTo(0)
     }
 
+    // ---- V17 (Phase 4A.3) — identifier write policies now require OWNER/ADMIN ----
+    //
+    // V14 shipped identifier write policies that delegated only to
+    // parent-patient visibility (ACTIVE membership), NOT role. V17
+    // tightens to match V14's patient-write role gate. The four
+    // tests below prove the tightened policies.
+
+    @Test
+    fun `V17 — OWNER alice CAN INSERT a patient_identifier (happy path)`() {
+        val newId = UUID.randomUUID()
+        val rows = runAsAppWithGucs(userId = aliceId, tenantId = tenantAId) { jdbc ->
+            jdbc.update(
+                """
+                INSERT INTO clinical.patient_identifier(
+                    id, patient_id, type, issuer, value,
+                    created_at, updated_at, row_version
+                ) VALUES (?, ?, 'DRIVERS_LICENSE', 'CA', 'A-OWN-1', NOW(), NOW(), 0)
+                """.trimIndent(),
+                newId, patientAId,
+            )
+        }
+        assertThat(rows).isEqualTo(1)
+    }
+
+    @Test
+    fun `V17 — MEMBER dave CANNOT INSERT a patient_identifier — role-gated WITH CHECK refusal`() {
+        runAsAppWithGucs(userId = daveId, tenantId = tenantAId) { jdbc ->
+            assertThatThrownBy {
+                jdbc.update(
+                    """
+                    INSERT INTO clinical.patient_identifier(
+                        id, patient_id, type, issuer, value,
+                        created_at, updated_at, row_version
+                    ) VALUES (?, ?, 'DRIVERS_LICENSE', 'CA', 'A-MBR-1', NOW(), NOW(), 0)
+                    """.trimIndent(),
+                    UUID.randomUUID(), patientAId,
+                )
+            }.isInstanceOf(Exception::class.java) // V17 WITH CHECK refusal
+        }
+    }
+
+    @Test
+    fun `V17 — MEMBER dave CANNOT UPDATE a patient_identifier — role-gated USING refusal`() {
+        // Admin path seeded an identifier (identifierAId) attached to
+        // patient A. Dave as MEMBER tries to soft-delete it via
+        // valid_to (the operational revoke path). V17's UPDATE
+        // policy USING clause hides the row from the MEMBER caller
+        // → zero rows affected.
+        val rows = runAsAppWithGucs(userId = daveId, tenantId = tenantAId) { jdbc ->
+            jdbc.update(
+                "UPDATE clinical.patient_identifier SET valid_to = NOW() WHERE id = ?",
+                identifierAId,
+            )
+        }
+        assertThat(rows)
+            .describedAs("V17 — MEMBER role must not update identifier rows")
+            .isZero()
+    }
+
+    @Test
+    fun `V17 — MEMBER dave CANNOT DELETE a patient_identifier — role-gated USING refusal`() {
+        val rows = runAsAppWithGucs(userId = daveId, tenantId = tenantAId) { jdbc ->
+            jdbc.update(
+                "DELETE FROM clinical.patient_identifier WHERE id = ?",
+                identifierAId,
+            )
+        }
+        assertThat(rows)
+            .describedAs("V17 — MEMBER role must not delete identifier rows")
+            .isZero()
+    }
+
     // ---- helpers ----
 
     private fun seedPatient(

@@ -105,19 +105,20 @@ class FlywayMigrationStateCheck(private val dataSource: DataSource) {
          * every migration baked into this build's resources.
          *
          * Migration IDs in the `db/migration` tree:
-         *   V1..V16 at time of Phase 4A.2 (V15 adds the per-tenant
-         *   MRN counter table `clinical.patient_mrn_counter` for
-         *   monotonic, rollback-safe MRN minting; V16 moves the
-         *   `fuzzystrmatch` extension from `flyway` to `public` so
-         *   `medcore_app` can call `soundex(...)` at runtime for
-         *   phonetic duplicate detection). After V16 applies, the
-         *   history table's `installed_rank` reaches 16.
+         *   V1..V17 at time of Phase 4A.3 (V15 adds the per-tenant
+         *   MRN counter table; V16 moves the `fuzzystrmatch`
+         *   extension to `public`; V17 tightens identifier RLS
+         *   write policies to require OWNER/ADMIN role — closes a
+         *   defense-in-depth gap in V14's identifier policies
+         *   surfaced by 4A.3's pattern-validation review). After
+         *   V17 applies, the history table's `installed_rank`
+         *   reaches 17.
          *
          * Bump this constant whenever a new VN migration lands (the
          * `safe-db-migration` skill in `.claude/skills/` carries this
          * as step N of the migration checklist).
          */
-        const val MIN_EXPECTED_INSTALLED_RANK: Int = 16
+        const val MIN_EXPECTED_INSTALLED_RANK: Int = 17
     }
 }
 

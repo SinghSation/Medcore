@@ -1,13 +1,14 @@
-# Clinical Write Pattern — v1.0
+# Clinical Write Pattern — v1.1
 
-**Status:** NORMATIVE as of Phase 4A.2.
-**Reference implementation:** `com.medcore.clinical.patient.*` (see
-file map in §9).
-**Scope:** every future PHI-bearing write surface (4A.3 patient
-identifiers; 4A.5 read + read-audit; 4B scheduling; 4C encounters;
-and beyond).
-**Previous versions:** none — 4A.2 is the first slice of the
-pattern. Future revisions land as ADR amendments only.
+**Status:** NORMATIVE as of Phase 4A.2 (v1.0); amended 4A.3 (v1.1).
+**Reference implementations:** `com.medcore.clinical.patient.*`
+— patient demographics (4A.2) + patient identifiers (4A.3). See
+file map in §9.
+**Scope:** every future PHI-bearing write surface (4A.5 read +
+read-audit; 4B scheduling; 4C encounters; and beyond).
+**Change log:** §11 tracks revisions. v1.1 lands three
+clarifications driven by 4A.3 pattern-validation — no
+breaking changes to v1.0 REQUIRED rules.
 
 ---
 
@@ -54,6 +55,27 @@ CI failure, not a style note.
 | `service` | `@Component` classes that hold logic callable from handlers | Rule 13 (`@Component` classes must depend on `PhiSessionContext`) |
 | `persistence` | JPA entities + Spring Data repositories | Cross-module boundary rules (Rule 10) |
 | `model` | Closed enums + value types | No ArchUnit rule (enums have no behaviour) |
+
+**`[INCIDENTAL]` RLS style options (v1.1 addition).** A feature's
+tables MAY choose between two RLS styles:
+
+1. **Direct both-GUCs** (4A.2 patient pattern) — every policy
+   independently checks `tenant_id = GUC` + membership. Best for
+   top-level aggregate roots.
+2. **Parent-delegation via EXISTS subquery** (4A.3 identifier
+   satellite pattern) — policies key on `EXISTS (SELECT 1 FROM
+   <parent> p WHERE p.id = ...)`. The subquery runs under the
+   parent's SELECT policy, inheriting tenant scoping + membership.
+
+**`[REQUIRED]` Delegation caveat.** If a satellite's WRITE
+policies delegate to the parent via EXISTS, the parent's SELECT
+policy must carry the satellite's needed role gate — OR the
+satellite's write policies must add an explicit role check in
+their subquery. 4A.1 V14 made the first mistake (delegated to
+`p_patient_select` which has no role gate); 4A.3 V17 fixed it
+by inlining explicit role check in the satellite's subquery.
+**Default to explicit role check in satellite write policies
+unless the parent policy already has one that matches.**
 
 ### 1.2 Incidental specifics from 4A.2
 
@@ -511,6 +533,24 @@ acceptance of wildcard — blind overwrites of PHI are disallowed.
 up to each feature." 3J.2's tenant display-name PATCH does not
 require it.
 
+**`[REQUIRED]` Scope clarification (v1.1 addition):** the
+`If-Match` rule applies to **PHI PATCH** endpoints specifically.
+It does NOT apply to:
+
+- **PHI DELETE** (soft-delete / revoke) — these are idempotent
+  lifecycle transitions. The second DELETE on an already-
+  revoked target returns the same outcome; `If-Match` adds no
+  safety. 4A.3 identifier revoke does not require `If-Match`.
+- **PHI POST** (create) — the resource doesn't yet exist, so
+  there is no row-version to match against.
+
+**Rule of thumb:** `If-Match` is required when the write
+transitions mutable state on an existing PHI row AND the
+client's desired mutation depends on state the server might
+have changed between the client's read and write. Revoke
+doesn't meet the second test (revoke-then-revoke is a no-op
+regardless of intervening state).
+
 ### 7.3 DTO discipline
 
 `[REQUIRED]` Request DTOs are bound with `@Valid @RequestBody`
@@ -722,6 +762,14 @@ ships.
   PHI-bearing features MUST wire `PhiRlsTxHook`.
 
 ### Authority + audit registry
+- [ ] `[REQUIRED]` **Decide: does this feature need a new
+  `MedcoreAuthority`, or does an existing one fit?**
+  (v1.1 addition — force an explicit decision rather than
+  letting authority sprawl happen silently.) Reuse is the
+  default unless a concrete clinical-role-differentiation
+  consumer drives a split. Log the decision in the feature's
+  PHI review. 4A.3 chose reuse (`PATIENT_UPDATE` covers
+  identifier management).
 - [ ] `[REQUIRED]` Any new `MedcoreAuthority` entries landed
   (closed enum, wire-stable strings) + `MembershipRoleAuthorities`
   map updated + `MembershipRoleAuthoritiesTest` updated.
@@ -801,3 +849,4 @@ code is the canonical reference at v1.0.
 | Version | Date | Change | Driven by |
 | ---- | ---- | ---- | ---- |
 | 1.0 | 2026-04-23 | Initial extraction from 4A.2 | Phase 4A.2 stabilization |
+| 1.1 | 2026-04-23 | Three non-breaking additions: (a) §10 checklist prompt "new authority or reuse?"; (b) §7.2 clarification — `If-Match` scope is PHI PATCH only (not DELETE or POST); (c) §1.1 RLS delegation option documented + caveat on satellite role gating | Phase 4A.3 pattern-validation |

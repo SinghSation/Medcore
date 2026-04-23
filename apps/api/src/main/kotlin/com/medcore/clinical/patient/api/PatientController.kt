@@ -1,9 +1,14 @@
 package com.medcore.clinical.patient.api
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.medcore.clinical.patient.write.AddPatientIdentifierCommand
+import com.medcore.clinical.patient.write.AddPatientIdentifierHandler
 import com.medcore.clinical.patient.write.CreatePatientCommand
 import com.medcore.clinical.patient.write.CreatePatientHandler
+import com.medcore.clinical.patient.write.PatientIdentifierSnapshot
 import com.medcore.clinical.patient.write.PatientSnapshot
+import com.medcore.clinical.patient.write.RevokePatientIdentifierCommand
+import com.medcore.clinical.patient.write.RevokePatientIdentifierHandler
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsCommand
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsHandler
 import com.medcore.clinical.patient.write.UpdatePatientDemographicsSnapshot
@@ -21,6 +26,7 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -78,6 +84,13 @@ class PatientController(
     private val updatePatientDemographicsGate:
         WriteGate<UpdatePatientDemographicsCommand, UpdatePatientDemographicsSnapshot>,
     private val updatePatientDemographicsHandler: UpdatePatientDemographicsHandler,
+    // --- Phase 4A.3 identifier satellite ---
+    private val addPatientIdentifierGate:
+        WriteGate<AddPatientIdentifierCommand, PatientIdentifierSnapshot>,
+    private val addPatientIdentifierHandler: AddPatientIdentifierHandler,
+    private val revokePatientIdentifierGate:
+        WriteGate<RevokePatientIdentifierCommand, PatientIdentifierSnapshot>,
+    private val revokePatientIdentifierHandler: RevokePatientIdentifierHandler,
 ) {
 
     /**
@@ -157,6 +170,89 @@ class PatientController(
             .eTag("\"${result.snapshot.rowVersion}\"")
             .body(responseBody)
     }
+
+    // ========================================================================
+    // Phase 4A.3 — patient identifier satellite
+    // ========================================================================
+
+    /**
+     * Add an external identifier to a patient (Phase 4A.3).
+     * `PATIENT_UPDATE` required (OWNER or ADMIN). DB-level UNIQUE
+     * on `(patient_id, type, issuer, value)` catches exact-
+     * duplicates → 409 `resource.conflict`. V17 RLS WITH CHECK
+     * refuses non-OWNER/ADMIN callers at the persistence layer
+     * (defense in depth).
+     *
+     * ### Carry-forward — re-add-after-revoke
+     *
+     * The UNIQUE constraint counts revoked rows (with non-null
+     * `valid_to`). A caller cannot re-add an identifier with
+     * the same `(type, issuer, value)` after revoking it.
+     * Tracked as a 4A.3 carry-forward; amend to a partial
+     * unique index `WHERE valid_to IS NULL` if a pilot workflow
+     * demands it.
+     */
+    @PostMapping(
+        "/{patientId}/identifiers",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun addPatientIdentifier(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable patientId: UUID,
+        @Valid @RequestBody body: AddPatientIdentifierRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<WriteResponse<PatientIdentifierResponse>> {
+        val command = body.toCommand(slug, patientId)
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = addPatientIdentifierGate.apply(command, context) { cmd ->
+            addPatientIdentifierHandler.handle(cmd, context)
+        }
+        val responseBody = WriteResponse(
+            data = PatientIdentifierResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.status(HttpStatus.CREATED)
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
+    }
+
+    /**
+     * Revoke (soft-delete via `valid_to`) an identifier
+     * (Phase 4A.3). `PATIENT_UPDATE` required. Idempotent:
+     * DELETE on an already-revoked identifier returns 204 with
+     * no state change and no audit row. Precedent from 3J.N
+     * `DELETE /memberships/{id}`.
+     *
+     * No `If-Match` header required — revoke is idempotent
+     * and lifecycle-transition-scoped, not demographic-edit-
+     * scoped. Matches `clinical-write-pattern.md` §7.2 scope
+     * clarification (If-Match is a PHI-PATCH concern).
+     */
+    @DeleteMapping("/{patientId}/identifiers/{identifierId}")
+    fun revokePatientIdentifier(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable patientId: UUID,
+        @PathVariable identifierId: UUID,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<Void> {
+        val command = RevokePatientIdentifierCommand(
+            slug = slug,
+            patientId = patientId,
+            identifierId = identifierId,
+        )
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        revokePatientIdentifierGate.apply(command, context) { cmd ->
+            revokePatientIdentifierHandler.handle(cmd, context)
+        }
+        return ResponseEntity.noContent().build()
+    }
+
+    // ========================================================================
+    // Helpers
+    // ========================================================================
 
     /**
      * Parses the RFC 7232 `If-Match` header into a `Long`

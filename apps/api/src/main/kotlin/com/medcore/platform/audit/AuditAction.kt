@@ -187,6 +187,64 @@ enum class AuditAction(val code: String) {
      * unchanged).
      */
     PATIENT_DEMOGRAPHICS_UPDATED("clinical.patient.demographics_updated"),
+
+    // --- Phase 4A.3: patient identifier satellite writes ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/patients/{patientId}/identifiers`
+     * when an OWNER/ADMIN adds a new external identifier
+     * (MRN_EXTERNAL / DRIVERS_LICENSE / INSURANCE_MEMBER / OTHER)
+     * to a patient (Phase 4A.3).
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.write.AddPatientIdentifierAuditor]:
+     *   - `actor_type` = USER
+     *   - `actor_id` = caller userId
+     *   - `tenant_id` = target tenant UUID
+     *   - `resource_type` = `"clinical.patient.identifier"`
+     *   - `resource_id` = new identifier UUID
+     *   - `outcome` = SUCCESS
+     *   - `reason` = `intent:clinical.patient.identifier.add|type:<IDENTIFIER_TYPE>`
+     *     where `<IDENTIFIER_TYPE>` is a closed-enum token from
+     *     [com.medcore.clinical.patient.model.PatientIdentifierType].
+     *
+     * **PHI discipline.** The `type` token in the reason is a
+     * closed-enum value (4 entries: MRN_EXTERNAL / DRIVERS_LICENSE
+     * / INSURANCE_MEMBER / OTHER). The `issuer` and `value`
+     * fields are NEVER in the reason — `value` for DL/Insurance is
+     * strongly PHI; `issuer` is implementation detail and not
+     * audit-scope. Forensic resolution of the specific identifier
+     * row goes through `resource_id` (the UUID), inheriting the
+     * RLS envelope of `clinical.patient_identifier`.
+     *
+     * Add is never a no-op (an identifier is always a new row) —
+     * this action is always emitted on success.
+     */
+    PATIENT_IDENTIFIER_ADDED("clinical.patient.identifier.added"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `DELETE /api/v1/tenants/{slug}/patients/{patientId}/identifiers/{identifierId}`
+     * when an OWNER/ADMIN revokes a patient identifier
+     * (Phase 4A.3).
+     *
+     * **Revocation is SOFT DELETE**, not row deletion. The handler
+     * sets `valid_to = NOW()` on the identifier row. Audit wise,
+     * the `resource_id` is still the identifier's UUID (the row
+     * persists for audit integrity), and the action name
+     * `revoked` captures the lifecycle transition.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.write.RevokePatientIdentifierAuditor]:
+     *   - `resource_type` = `"clinical.patient.identifier"`
+     *   - `resource_id` = target identifier UUID
+     *   - `reason` = `intent:clinical.patient.identifier.revoke|type:<IDENTIFIER_TYPE>`
+     *
+     * **Suppressed for no-op writes** — an idempotent DELETE on
+     * an already-revoked identifier (valid_to already set)
+     * returns 204 with no audit row.
+     */
+    PATIENT_IDENTIFIER_REVOKED("clinical.patient.identifier.revoked"),
 }
 
 /**

@@ -84,6 +84,7 @@ class MedcoreApiApplicationTests {
                 Row("14", "V14__clinical_patient_schema.sql", true),
                 Row("15", "V15__patient_mrn_counter.sql", true),
                 Row("16", "V16__fuzzystrmatch_public_schema.sql", true),
+                Row("17", "V17__patient_identifier_role_gate.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

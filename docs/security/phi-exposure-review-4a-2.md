@@ -650,3 +650,50 @@ PatientEntityMappingTest (6) = 16. Plus all prior suites.
 | ---- | ---- | ---- |
 | ArchUnit Rule 13 `.allowEmptyShould(true)` allowance | 4A.0 | **Closed in 4A.2** — `DuplicatePatientDetector` is the first `@Component`-annotated `..clinical..service..` class with real `PhiSessionContext` dependency. |
 | `WriteContext.idempotencyKey` — patient-create is the canonical first consumer | 3J.1 | **Shape-only consumption confirmed** (not full dedupe); remains partially open per row above. |
+
+---
+
+## Addendum — appended 2026-04-23 during Phase 4A.3 pattern validation
+
+**V14 identifier RLS role-gate gap — identified + closed in V17.**
+
+During Phase 4A.3's first real exercise of
+`clinical-write-pattern.md` v1.0 as a forcing function, a
+defense-in-depth gap was found in V14's
+`clinical.patient_identifier` RLS policies (which shipped in
+4A.1, re-exercised during 4A.3):
+
+- Policies for INSERT / UPDATE / DELETE delegated visibility
+  to the parent-patient subquery
+  `EXISTS (SELECT 1 FROM clinical.patient p WHERE p.id = ...)`.
+- That subquery runs under `p_patient_select`, which enforces
+  only `status != 'DELETED'`, tenant scope via GUC, and
+  ACTIVE membership — but **does NOT enforce OWNER/ADMIN role**.
+- V14's inline comment asserted "writes on the parent already
+  require OWNER/ADMIN; identifier INSERT inherits that gate"
+  — factually incorrect. A MEMBER caller bypassing the
+  app-layer policy could INSERT/UPDATE/DELETE identifiers
+  at the RLS layer.
+
+**No observed exposure.** The gap was purely a defense-in-
+depth shortfall. The application-layer `AuthzPolicy`
+(`AddPatientIdentifierPolicy` / `RevokePatientIdentifierPolicy`
+in 4A.3; no app path in 4A.1/4A.2) remained the effective
+gate, and `WriteGate` + ArchUnit Rule 12 enforced that this
+gate was the only entry to the repository. The gap would
+have mattered only if a future code path bypassed
+WriteGate — which ArchUnit Rule 12 forbids.
+
+**Closed in V17** (Phase 4A.3 Chunk A) by tightening the
+three identifier write policies to explicitly require
+OWNER/ADMIN via the membership-check subquery, matching V14's
+patient-write policy shape.
+
+**Lesson incorporated into `clinical-write-pattern.md` v1.1
+§1.1** — RLS delegation via parent subquery is permitted, but
+if the satellite's writes need role gating, the satellite's
+own policy MUST inline the role check rather than assuming
+delegation inherits it.
+
+No additional carry-forwards from this discovery. 4A.3's
+full identifier surface is GREEN post-V17.

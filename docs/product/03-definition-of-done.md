@@ -1732,10 +1732,103 @@ defense-in-depth perimeter under real end-to-end HTTP traffic.
   - Real `Idempotency-Key` dedupe persistence (4A.2.1
     hardening OR 6A Stripe-webhook flow).
 
-#### 3.8.4 Phase 4A.3+ — Address/contact history, FHIR read, read audit, merge
+#### 3.8.4 Phase 4A.3 — Patient identifiers (first pattern reuse)
+
+First slice to exercise `clinical-write-pattern.md` v1.0 as a
+forcing function. Adds write path to the `clinical.patient_identifier`
+satellite (already in V14/4A.1). Pattern held; three non-
+breaking v1.1 amendments surfaced by the exercise.
+
+- [ ] `V17__patient_identifier_role_gate.sql` — amends V14's
+      identifier INSERT/UPDATE/DELETE policies to require
+      OWNER/ADMIN in the membership-check subquery. Closes a
+      factual error in V14's inline comment (which asserted
+      the role gate was inherited from parent — it wasn't).
+- [ ] `AddPatientIdentifierCommand` stack — Command + Validator
+      (`blank` / `format` / `too_long` / `control_chars` /
+      `valid_range` codes) + Policy (reuses
+      `PATIENT_UPDATE`) + Handler (load patient, build entity,
+      `saveAndFlush`) + Auditor (`PATIENT_IDENTIFIER_ADDED`).
+- [ ] `RevokePatientIdentifierCommand` stack — Command + Policy
+      + Handler (soft-delete via `valid_to = NOW()`, idempotent
+      on already-revoked) + Auditor (`PATIENT_IDENTIFIER_REVOKED`
+      with no-op suppression). No validator (no body on DELETE,
+      3J.N precedent).
+- [ ] `PatientIdentifierSnapshot` data class (includes
+      `changed` flag for no-op suppression).
+- [ ] Two new HTTP endpoints appended to existing
+      `PatientController`: `POST /patients/{id}/identifiers`,
+      `DELETE /patients/{id}/identifiers/{identifierId}`.
+      No If-Match on DELETE (lifecycle transition, precedent
+      from 3J.N).
+- [ ] `AddPatientIdentifierRequest` + `PatientIdentifierResponse`
+      DTOs appended to `PatientDtos.kt`. Type coercion via
+      `enumValueOf<PatientIdentifierType>` with
+      `WriteValidationException(field=type, code=format)`
+      on unknown value.
+- [ ] Two new `@Bean` gates in `PatientWriteConfig`
+      (`addPatientIdentifierGate`, `revokePatientIdentifierGate`).
+      Both use `PhiRlsTxHook`.
+- [ ] Two new `AuditAction` entries with NORMATIVE
+      shape-contract KDoc:
+      `PATIENT_IDENTIFIER_ADDED` +
+      `PATIENT_IDENTIFIER_REVOKED`.
+      Reason slugs: `intent:clinical.patient.identifier.{add|revoke}|type:<TYPE>`
+      — `type` token is closed-enum; `issuer` and `value`
+      NEVER appear.
+- [ ] **Authority reuse** — `PATIENT_UPDATE` from 4A.1 covers
+      identifier management. New authority NOT introduced
+      (decision logged in PHI review §0 + deliberate per
+      template v1.1 §10 checklist prompt).
+- [ ] `FlywayMigrationStateCheck.MIN_EXPECTED_INSTALLED_RANK`
+      bumped 16 → 17. `MedcoreApiApplicationTests` expected-
+      migrations list appended.
+- [ ] **Template v1.1 amendments** in
+      `docs/architecture/clinical-write-pattern.md`:
+      (a) §10 checklist: "does this feature need a new
+      authority?" prompt; (b) §7.2 `If-Match` scope
+      clarification (PHI PATCH only, not DELETE/POST);
+      (c) §1.1 RLS delegation option documented with
+      satellite-role-gate caveat.
+- [ ] Tests (28 new in 4A.3 across 4 new suites + 4 cases
+      appended to `PatientSchemaRlsTest`):
+  - `AddPatientIdentifierValidatorTest` (10) — every closed-
+    enum code exercised.
+  - `AddPatientIdentifierIntegrationTest` (8) — HTTP→DB happy,
+    ADMIN allowed, MEMBER denied, cross-tenant 404, duplicate
+    tuple 409, missing-issuer 422, unknown-type 422.
+  - `RevokePatientIdentifierIntegrationTest` (5) — happy +
+    idempotent (no second audit row) + cross-tenant 404 +
+    cross-patient ID-smuggling 404 + MEMBER denial.
+  - `PatientIdentifierLogPhiLeakageTest` (1) — `value` +
+    `issuer` never appear in captured stdout after POST +
+    DELETE.
+  - `PatientSchemaRlsTest` (+4) — V17 proof: OWNER allowed
+    INSERT; MEMBER refused on INSERT, UPDATE, DELETE at
+    RLS layer.
+- [ ] **PHI-exposure review** — `docs/security/phi-exposure-
+      review-4a-3.md`. Risk determination: Low. First
+      satellite PHI review; 11 attack-surface scenarios
+      analysed.
+- [ ] Existing 390 tests still green; total after 4A.3:
+      **418/418 across the full suite (+28)**.
+- [ ] **Carry-forwards closed in 4A.3**:
+  - Identifier management as a separate slice (4A.2 PHI
+    review) — closed.
+  - V14 identifier RLS role-gate gap (surfaced during
+    pattern-validation) — closed via V17.
+- [ ] **Carry-forwards opened by 4A.3**:
+  - CF-4A3-1 — partial UNIQUE index (`WHERE valid_to IS NULL`)
+    to allow re-add-after-revoke. Extremely rare in practice.
+  - CF-4A3-2 — identifier UPDATE command (value/issuer change
+    without revoke-readd).
+  - CF-4A3-3 — future pattern v1.2 amendments if surfaced by
+    later slices.
+
+#### 3.8.5 Phase 4A.3.1+ — Address/contact history, FHIR read, read audit, merge
 
 <!-- TODO(content): populated as each 4A sub-slice opens:
-     - 4A.3: Address + contact append-only history tables
+     - 4A.3.1 (was 4A.3): Address + contact append-only history tables
      - 4A.4: GET /fhir/r4/Patient/{id} + US Core mapping
      - 4A.5: Read endpoint + read auditing (CLINICAL_PATIENT_ACCESSED)
      - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
@@ -1761,9 +1854,9 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.2 — FIRST REAL PHI WRITE
-PATH shipped: POST + PATCH /patients through WriteGate +
-PhiRlsTxHook + duplicate detection + 50-parallel concurrency
-proof + If-Match enforcement with 428/409 semantics; ArchUnit
-Rule 13 activated. 390/390 across the full suite). Next review:
+*Last reviewed: 2026-04-23 (Phase 4A.3 — first real pattern
+reuse: identifier add + revoke through the clinical-write-
+pattern v1.0 baseline. V17 closes V14's identifier RLS role-
+gate gap. Template amended to v1.1 with three non-breaking
+clarifications. 418/418 across the full suite). Next review:
 2026-05-25, or on the next phase opening (whichever is sooner).*
