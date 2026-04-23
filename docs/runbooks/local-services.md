@@ -511,16 +511,41 @@ View` flow.
 
 - `docker compose up -d postgres mock-oauth2-server` (§3).
 - API running via `make api-dev` (§14 `.env` + `set -a; . ./.env; set +a`).
-- A signed-in browser session at `http://localhost:5173` — signing in
-  once is what JIT-provisions the `identity.user` row this script
-  grants membership to.
+- A signed-in browser session at `http://localhost:5173` as
+  **subject `demo-user-1`** — see §16.2 below for why this is
+  not optional.
 
-### 16.2 Seed a tenant + membership + three patients
+### 16.2 Use a STABLE subject for every sign-in
 
-Sign into the web app once as `demo-user-1` (paste-token flow at
-`http://localhost:5173` using the mock IdP debugger at
-`http://localhost:8888/default/debugger`). This creates the
-`identity.user` row. Then, in a terminal:
+> **Why this matters.** The `mock-oauth2-server` debugger
+> auto-generates a fresh UUID in the `sub` claim every time
+> you mint a token UNLESS you explicitly set the Subject
+> field. Each unique `sub` creates a new `identity.user` row
+> via JIT provisioning, and the demo tenant's OWNER
+> membership will not follow that fresh user. Signing in
+> twice without a fixed subject = two "users" = the second
+> sign-in shows "No active memberships on this account".
+>
+> Always pin the Subject to `demo-user-1` (or a similar
+> stable string) in the debugger. This is a local-dev
+> contrivance; real IdPs (WorkOS, Okta, Auth0) issue stable
+> `sub` claims automatically.
+
+Open `http://localhost:8888/default/debugger` in the browser:
+
+1. In the **Subject** input field, type `demo-user-1`.
+2. Click **Issue Token**.
+3. Copy the `access_token` from the Token Response box.
+4. Paste it into `http://localhost:5173`'s login textarea
+   and click **Sign in**.
+
+The first sign-in creates the `identity.user` row for
+`demo-user-1`. Subsequent sign-ins — as long as Subject is
+the same — resolve to the same row.
+
+### 16.3 Seed a tenant + membership + three patients
+
+Then, in a terminal:
 
 ```bash
 docker compose exec postgres \
@@ -563,19 +588,23 @@ docker compose exec postgres \
 # expected: acme-health | Acme Health
 ```
 
-### 16.3 Create a handful of patients via the API
+### 16.4 Create a handful of patients via the API
 
 Patients go through the full write path (WriteGate + audit chain +
-RLS), so create them via HTTP not SQL. Grab a bearer token from the
-mock IdP debugger (§14's flow) and:
+RLS), so create them via HTTP not SQL. Grab a bearer token using
+the stable-subject flow in §16.2, then:
 
 ```bash
+# Paste the token you minted in §16.2 with Subject = demo-user-1.
 TOKEN='eyJraWQi...paste.here...'
 
+# Note: birth dates MUST be >= 1900-01-01 (CreatePatientValidator
+# MIN_BIRTH_DATE). Historical accuracy is not the point here —
+# the demo just needs three rows. Dates below are fabricated.
 for entry in \
-    '{"nameGiven":"Ada","nameFamily":"Lovelace","birthDate":"1815-12-10","administrativeSex":"female"}' \
-    '{"nameGiven":"Grace","nameFamily":"Hopper","birthDate":"1906-12-09","administrativeSex":"female"}' \
-    '{"nameGiven":"Katherine","nameFamily":"Johnson","birthDate":"1918-08-26","administrativeSex":"female"}' ; do
+    '{"nameGiven":"Ada","nameFamily":"Lovelace","birthDate":"1960-03-15","administrativeSex":"female"}' \
+    '{"nameGiven":"Grace","nameFamily":"Hopper","birthDate":"1956-12-09","administrativeSex":"female"}' \
+    '{"nameGiven":"Katherine","nameFamily":"Johnson","birthDate":"1948-08-26","administrativeSex":"female"}' ; do
   curl -fsS -X POST http://localhost:8080/api/v1/tenants/acme-health/patients \
        -H "Authorization: Bearer $TOKEN" \
        -H "X-Medcore-Tenant: acme-health" \
@@ -588,7 +617,7 @@ Reload `http://localhost:5173`, click **Acme Health** on the tenants
 card, and the patient list page should show three rows ordered
 newest-first.
 
-### 16.4 Wiping the demo
+### 16.5 Wiping the demo
 
 ```bash
 docker compose exec postgres \
