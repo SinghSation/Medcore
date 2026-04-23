@@ -493,3 +493,118 @@ both passing and failing role configurations.
   once Flyway lands in Phase 3A Step 2).
 - `docs/runbooks/development.md` — broader local dev setup.
 - `docs/runbooks/github-auth.md` — git credential setup.
+
+## 16. Demo seed for Vertical Slice 1 (Phase 4B.1+)
+
+> **Scope note.** Seeding lives in this runbook ON PURPOSE. There is
+> NO seed code in the repository (no startup `DataInitializer`, no
+> test-only fixture injected at runtime, no `SQL` resource in `main`).
+> Seeds that ship in code paths become production hazards when someone
+> later flips a flag; seeds that live in a runbook stay dev-only.
+
+The Vertical Slice 1 demo requires a tenant, an OWNER membership for
+your JIT-provisioned user, and a handful of patients before the
+frontend at `http://localhost:5173` can exercise the `Login → List →
+View` flow.
+
+### 16.1 One-time prerequisites
+
+- `docker compose up -d postgres mock-oauth2-server` (§3).
+- API running via `make api-dev` (§14 `.env` + `set -a; . ./.env; set +a`).
+- A signed-in browser session at `http://localhost:5173` — signing in
+  once is what JIT-provisions the `identity.user` row this script
+  grants membership to.
+
+### 16.2 Seed a tenant + membership + three patients
+
+Sign into the web app once as `demo-user-1` (paste-token flow at
+`http://localhost:5173` using the mock IdP debugger at
+`http://localhost:8888/default/debugger`). This creates the
+`identity.user` row. Then, in a terminal:
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" <<'SQL'
+
+BEGIN;
+
+-- 1. Create the tenant.
+INSERT INTO tenancy.tenant(
+    id, slug, display_name, status,
+    created_at, updated_at, row_version
+) VALUES (
+    gen_random_uuid(), 'acme-health', 'Acme Health', 'ACTIVE',
+    NOW(), NOW(), 0
+);
+
+-- 2. Grant the JIT-provisioned `demo-user-1` an ACTIVE OWNER
+--    membership on the tenant just created.
+INSERT INTO tenancy.tenant_membership(
+    id, tenant_id, user_id, role, status,
+    created_at, updated_at, row_version
+) VALUES (
+    gen_random_uuid(),
+    (SELECT id FROM tenancy.tenant WHERE slug = 'acme-health'),
+    (SELECT id FROM identity."user" WHERE subject = 'demo-user-1'),
+    'OWNER', 'ACTIVE',
+    NOW(), NOW(), 0
+);
+
+COMMIT;
+SQL
+```
+
+Confirm:
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" \
+  -c "SELECT slug, display_name FROM tenancy.tenant;"
+# expected: acme-health | Acme Health
+```
+
+### 16.3 Create a handful of patients via the API
+
+Patients go through the full write path (WriteGate + audit chain +
+RLS), so create them via HTTP not SQL. Grab a bearer token from the
+mock IdP debugger (§14's flow) and:
+
+```bash
+TOKEN='eyJraWQi...paste.here...'
+
+for entry in \
+    '{"nameGiven":"Ada","nameFamily":"Lovelace","birthDate":"1815-12-10","administrativeSex":"female"}' \
+    '{"nameGiven":"Grace","nameFamily":"Hopper","birthDate":"1906-12-09","administrativeSex":"female"}' \
+    '{"nameGiven":"Katherine","nameFamily":"Johnson","birthDate":"1918-08-26","administrativeSex":"female"}' ; do
+  curl -fsS -X POST http://localhost:8080/api/v1/tenants/acme-health/patients \
+       -H "Authorization: Bearer $TOKEN" \
+       -H "X-Medcore-Tenant: acme-health" \
+       -H "Content-Type: application/json" \
+       -d "$entry" >/dev/null
+done
+```
+
+Reload `http://localhost:5173`, click **Acme Health** on the tenants
+card, and the patient list page should show three rows ordered
+newest-first.
+
+### 16.4 Wiping the demo
+
+```bash
+docker compose exec postgres \
+  psql -U "${POSTGRES_USER:-medcore}" -d "${POSTGRES_DB:-medcore_dev}" <<'SQL'
+BEGIN;
+DELETE FROM clinical.patient_identifier;
+DELETE FROM clinical.patient;
+DELETE FROM clinical.patient_mrn_counter;
+DELETE FROM tenancy.tenant_membership;
+DELETE FROM tenancy.tenant;
+DELETE FROM audit.audit_event;
+DELETE FROM identity."user";
+COMMIT;
+SQL
+```
+
+A full `docker compose down --volumes` (§7) also wipes everything but
+nukes the whole Postgres cluster along with it — use only if the
+schema itself needs to be re-migrated.

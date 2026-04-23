@@ -3,6 +3,9 @@ package com.medcore.clinical.patient.api
 import com.fasterxml.jackson.databind.JsonNode
 import com.medcore.clinical.patient.read.GetPatientCommand
 import com.medcore.clinical.patient.read.GetPatientHandler
+import com.medcore.clinical.patient.read.ListPatientsCommand
+import com.medcore.clinical.patient.read.ListPatientsHandler
+import com.medcore.clinical.patient.read.ListPatientsResult
 import com.medcore.clinical.patient.write.AddPatientIdentifierCommand
 import com.medcore.clinical.patient.write.AddPatientIdentifierHandler
 import com.medcore.clinical.patient.write.CreatePatientCommand
@@ -37,6 +40,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 /**
@@ -98,7 +102,80 @@ class PatientController(
     // --- Phase 4A.4 read path ---
     private val getPatientGate: ReadGate<GetPatientCommand, PatientSnapshot>,
     private val getPatientHandler: GetPatientHandler,
+    // --- Phase 4B.1 list path (Vertical Slice 1, Chunk B) ---
+    private val listPatientsGate: ReadGate<ListPatientsCommand, ListPatientsResult>,
+    private val listPatientsHandler: ListPatientsHandler,
 ) {
+
+    /**
+     * List patients in a tenant (Phase 4B.1, Vertical Slice 1
+     * Chunk B). `PATIENT_READ` required (OWNER, ADMIN, or
+     * MEMBER per the 4A.1 role map).
+     *
+     * First bulk-disclosure PHI endpoint in Medcore. Every
+     * successful 200 emits exactly ONE
+     * `CLINICAL_PATIENT_LIST_ACCESSED` audit row INSIDE the
+     * ReadGate transaction (ADR-003 §2 atomicity extended to
+     * reads; 4A.4 precedent).
+     *
+     * ### Pagination contract
+     *
+     * - Query params: `limit` (default 20, max 50), `offset`
+     *   (default 0, min 0).
+     * - `offset` MUST be a multiple of `limit` — misaligned
+     *   pagination returns 422 `request.validation_failed`
+     *   field `offset`. This is a deliberate simplification:
+     *   page-boundary navigation is the only supported pattern
+     *   in 4B.1; arbitrary-offset navigation requires cursor
+     *   semantics and is a later slice.
+     * - Ordering is fixed to `created_at DESC, id DESC` —
+     *   deterministic and NOT client-tunable.
+     *
+     * ### RLS envelope
+     *
+     * Both the page query and the count query run under
+     * `medcore_app` with the caller's `app.current_user_id` /
+     * `app.current_tenant_id` GUCs set by `PhiRlsTxHook`. V14
+     * `p_patient_select` filters cross-tenant rows and
+     * soft-deleted rows at the DB layer. `totalCount` is the
+     * RLS-visible count, not the raw tenant population.
+     *
+     * ### PHI on the wire
+     *
+     * List items carry a NARROWER shape than the detail
+     * endpoint: `id, mrn, nameGiven, nameFamily, birthDate,
+     * administrativeSex, createdAt` only. Verbose fields
+     * (addresses, phone numbers, preferred name, language,
+     * status, row_version, identifiers beyond MRN) are
+     * available via the per-patient detail endpoint. Narrower
+     * wire = less PHI-on-the-wire per list fetch.
+     *
+     * ### Response
+     *
+     * `ApiResponse<PatientListResponse>` with `items`,
+     * `totalCount`, `limit`, `offset`, `hasMore`. No ETag —
+     * list responses are not individually cache-coherent.
+     */
+    @GetMapping(produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun listPatients(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @RequestParam(name = "limit", required = false, defaultValue = "20") limit: Int,
+        @RequestParam(name = "offset", required = false, defaultValue = "0") offset: Int,
+    ): ResponseEntity<ApiResponse<PatientListResponse>> {
+        validateLimit(limit)
+        validateOffset(offset, limit)
+        val command = ListPatientsCommand(slug = slug, limit = limit, offset = offset)
+        val context = WriteContext(principal = principal, idempotencyKey = null)
+        val result = listPatientsGate.apply(command, context) { cmd ->
+            listPatientsHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = PatientListResponse.from(result),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok(responseBody)
+    }
 
     /**
      * Read a patient (Phase 4A.4). `PATIENT_READ` required
@@ -324,5 +401,46 @@ class PatientController(
         val trimmed = header.trim().removeSurrounding("\"")
         return trimmed.toLongOrNull()
             ?: throw WriteValidationException(field = "If-Match", code = "malformed")
+    }
+
+    /**
+     * Bounds-check for `limit` query param (Phase 4B.1). `min 1`
+     * rejects zero- and negative-page fetches; `max` is bounded
+     * at [MAX_LIMIT] to prevent unbounded enumeration (both a
+     * DoS concern and a PHI-exposure concern). 422 envelope
+     * matches the rest of the request-validation surface.
+     */
+    private fun validateLimit(limit: Int) {
+        if (limit < 1) {
+            throw WriteValidationException(field = "limit", code = "min")
+        }
+        if (limit > MAX_LIMIT) {
+            throw WriteValidationException(field = "limit", code = "max")
+        }
+    }
+
+    /**
+     * Bounds-check for `offset` query param. Negative offsets
+     * are rejected. `offset % limit == 0` is REQUIRED — see
+     * `listPatients` KDoc for the page-boundary rationale.
+     */
+    private fun validateOffset(offset: Int, limit: Int) {
+        if (offset < 0) {
+            throw WriteValidationException(field = "offset", code = "min")
+        }
+        if (offset % limit != 0) {
+            throw WriteValidationException(field = "offset", code = "page_boundary")
+        }
+    }
+
+    private companion object {
+        /**
+         * Hard ceiling on `limit`. Chosen to balance clinician
+         * productivity (enough rows per page to scan) against
+         * bulk-enumeration and DoS concerns. Cursor-based
+         * pagination is the correct solution for larger page
+         * sizes and is a carry-forward for a later slice.
+         */
+        const val MAX_LIMIT: Int = 50
     }
 }

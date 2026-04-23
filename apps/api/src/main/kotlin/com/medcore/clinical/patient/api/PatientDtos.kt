@@ -264,6 +264,98 @@ data class PatientResponse(
 }
 
 // ============================================================================
+// Phase 4B.1 — patient list response (Vertical Slice 1, Chunk B)
+// ============================================================================
+
+/**
+ * Summary-view wire shape for a single patient in the list
+ * response (Phase 4B.1).
+ *
+ * **Deliberately narrower than [PatientResponse]**. The list
+ * endpoint is a summary view for clinician navigation — a
+ * "find the patient I want to open" surface — and carries the
+ * minimum PHI needed for that task:
+ *
+ *   - [id] for detail-page navigation
+ *   - [mrn] for identification
+ *   - [nameGiven] + [nameFamily] for display
+ *   - [birthDate] for disambiguation across same-name rows
+ *   - [administrativeSex] for disambiguation
+ *   - [createdAt] for ordering transparency
+ *
+ * **Fields intentionally NOT in the list**: middle/suffix/prefix
+ * names, preferred name, preferred language, sex-assigned-at-
+ * birth, gender identity code, status, row_version, identifiers
+ * beyond MRN, created_by/updated_by, updatedAt, addresses, phone
+ * numbers. The detail endpoint ([PatientResponse] via
+ * `GET /patients/{id}`) is the full surface.
+ *
+ * Narrower wire = less PHI on the wire for the common case
+ * (list fetch is called far more often than detail fetch), less
+ * serialisation cost, and less client-side PHI retention.
+ *
+ * `administrativeSex` renders as the FHIR wire string (lowercase)
+ * matching [PatientResponse].
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class PatientListItemResponse(
+    val id: UUID,
+    val mrn: String,
+    val nameGiven: String,
+    val nameFamily: String,
+    val birthDate: LocalDate,
+    val administrativeSex: String,
+    val createdAt: Instant,
+) {
+    companion object {
+        fun from(snapshot: PatientSnapshot): PatientListItemResponse =
+            PatientListItemResponse(
+                id = snapshot.id,
+                mrn = snapshot.mrn,
+                nameGiven = snapshot.nameGiven,
+                nameFamily = snapshot.nameFamily,
+                birthDate = snapshot.birthDate,
+                administrativeSex = snapshot.administrativeSex.wireValue,
+                createdAt = snapshot.createdAt,
+            )
+    }
+}
+
+/**
+ * Wire envelope for `GET /api/v1/tenants/{slug}/patients`
+ * (Phase 4B.1). Wraps the page of items with pagination
+ * metadata so the frontend can render Prev/Next + totals
+ * without a second round-trip.
+ *
+ * `hasMore` is derived (`offset + items.size < totalCount`)
+ * and exposed on the wire for UI convenience — clients that
+ * prefer to compute locally can ignore it.
+ *
+ * `totalCount` reflects rows visible under the caller's RLS
+ * envelope, not the raw tenant population. For 4B.1's policies
+ * the two match for any ACTIVE member of a single tenant.
+ */
+data class PatientListResponse(
+    val items: List<PatientListItemResponse>,
+    val totalCount: Long,
+    val limit: Int,
+    val offset: Int,
+    val hasMore: Boolean,
+) {
+    companion object {
+        fun from(
+            result: com.medcore.clinical.patient.read.ListPatientsResult,
+        ): PatientListResponse = PatientListResponse(
+            items = result.items.map { PatientListItemResponse.from(it) },
+            totalCount = result.totalCount,
+            limit = result.limit,
+            offset = result.offset,
+            hasMore = result.hasMore,
+        )
+    }
+}
+
+// ============================================================================
 // Phase 4A.3 — patient identifier satellite (add + revoke)
 // ============================================================================
 

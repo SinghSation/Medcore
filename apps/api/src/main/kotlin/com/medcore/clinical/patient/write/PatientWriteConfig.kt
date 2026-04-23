@@ -3,6 +3,10 @@ package com.medcore.clinical.patient.write
 import com.medcore.clinical.patient.read.GetPatientAuditor
 import com.medcore.clinical.patient.read.GetPatientCommand
 import com.medcore.clinical.patient.read.GetPatientPolicy
+import com.medcore.clinical.patient.read.ListPatientsAuditor
+import com.medcore.clinical.patient.read.ListPatientsCommand
+import com.medcore.clinical.patient.read.ListPatientsPolicy
+import com.medcore.clinical.patient.read.ListPatientsResult
 import com.medcore.platform.read.ReadGate
 import com.medcore.platform.write.PhiRlsTxHook
 import com.medcore.platform.write.WriteGate
@@ -113,6 +117,30 @@ class PatientWriteConfig {
         txManager: PlatformTransactionManager,
         phiRlsTxHook: PhiRlsTxHook,
     ): ReadGate<GetPatientCommand, PatientSnapshot> =
+        ReadGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            txHook = phiRlsTxHook,
+        )
+
+    // --- Phase 4B.1: patient list (Vertical Slice 1, Chunk B) ---
+
+    /**
+     * [ReadGate] for patient list (Phase 4B.1). Wires
+     * `PhiRlsTxHook` so V14 RLS filters cross-tenant and
+     * soft-deleted rows from both the page query and the
+     * count query. Audit emission on success runs inside the
+     * transaction (single `CLINICAL_PATIENT_LIST_ACCESSED`
+     * row per call, regardless of items.size).
+     */
+    @Bean
+    fun listPatientsGate(
+        policy: ListPatientsPolicy,
+        auditor: ListPatientsAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): ReadGate<ListPatientsCommand, ListPatientsResult> =
         ReadGate(
             policy = policy,
             auditor = auditor,

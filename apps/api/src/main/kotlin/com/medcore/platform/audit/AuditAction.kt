@@ -284,6 +284,51 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_PATIENT_ACCESSED("clinical.patient.accessed"),
 
+    // --- Phase 4B.1: patient list (Vertical Slice 1, Chunk B) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/patients` when the caller
+     * successfully lists patients in a tenant (Phase 4B.1).
+     *
+     * **Distinct from [CLINICAL_PATIENT_ACCESSED]** so forensic
+     * review can separate "bulk enumeration events" from
+     * "single-patient disclosures." A list call that returns
+     * 200 items is ONE audit row, not 200.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.read.ListPatientsAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.patient"`
+     *   - `resource_id`   = null  (list has no single target row)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.patient.list|count:N|limit:L|offset:O"`
+     *
+     * **PHI discipline (NORMATIVE).** The reason slug carries
+     * ONLY the fixed intent token + three bounded integers
+     * (`count`, `limit`, `offset`). Patient UUIDs, names, MRNs,
+     * and demographics NEVER appear. Forensic resolution of
+     * "which rows were disclosed?" goes through `request_id`
+     * → structured-log join, NOT the audit row itself.
+     *
+     * **Integer-in-reason precedent.** `AUDIT_CHAIN_INTEGRITY_FAILED`
+     * already encodes an integer in its reason slug
+     * (`breaks:<N>`). Same pattern applies here — the audit
+     * envelope is deliberately flat (no JSON bag; ADR-003 §3)
+     * and dynamic-but-bounded data lives in the pipe-delimited
+     * reason tokens.
+     *
+     * **One row per list call**, including when `count = 0`.
+     * A list that returns zero rows IS a disclosure event (the
+     * caller learned "no matching rows exist for this view").
+     *
+     * **Runs INSIDE the ReadGate transaction.** Audit failure
+     * rolls back; the controller never serialises the response;
+     * the caller receives 500 with no PHI disclosure.
+     */
+    CLINICAL_PATIENT_LIST_ACCESSED("clinical.patient.list_accessed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

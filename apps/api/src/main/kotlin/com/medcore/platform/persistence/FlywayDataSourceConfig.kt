@@ -3,6 +3,7 @@ package com.medcore.platform.persistence
 import com.zaxxer.hikari.HikariDataSource
 import javax.sql.DataSource
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.autoconfigure.flyway.FlywayDataSource
 import org.springframework.context.annotation.Bean
@@ -37,6 +38,7 @@ import org.springframework.context.annotation.Primary
     havingValue = "true",
     matchIfMissing = true,
 )
+@ConditionalOnMissingBean(DataSource::class)
 class FlywayDataSourceConfig(
     @Value("\${spring.datasource.url}") private val appUrl: String,
     @Value("\${spring.datasource.username}") private val appUser: String,
