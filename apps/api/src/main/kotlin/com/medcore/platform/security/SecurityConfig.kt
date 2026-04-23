@@ -95,7 +95,14 @@ class SecurityConfig {
         accessDeniedHandler: AccessDeniedHandler,
     ): SecurityFilterChain {
         http
-            .securityMatcher("/api/**")
+            // Phase 4A.5 — extend the security chain to the
+            // `/fhir/r4/**` FHIR-native namespace in addition
+            // to `/api/**`. Same rules apply: stateless JWT,
+            // deny-by-default, explicit authentication required
+            // on every request. FHIR endpoints resolve tenant
+            // context via the `X-Medcore-Tenant` header
+            // identically to /api/** routes.
+            .securityMatcher("/api/**", "/fhir/**")
             .csrf { it.disable() }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests { it.anyRequest().authenticated() }

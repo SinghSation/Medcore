@@ -40,8 +40,13 @@ import org.springframework.web.filter.OncePerRequestFilter
  */
 class MdcUserIdFilter : OncePerRequestFilter() {
 
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        !request.requestURI.startsWith("/api/")
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean {
+        // Phase 4A.5 — extend coverage to `/fhir/r4/**` so MDC
+        // `user_id` is populated for FHIR-native requests,
+        // keeping log correlation symmetric with /api/** routes.
+        val uri = request.requestURI
+        return !uri.startsWith("/api/") && !uri.startsWith("/fhir/")
+    }
 
     override fun doFilterInternal(
         request: HttpServletRequest,

@@ -1913,10 +1913,107 @@ First PHI READ endpoint in Medcore. Introduces the
   - CF-4A4-6: Cross-cutting rename of `WriteContext` /
     `WriteTxHook`.
 
-#### 3.8.6 Phase 4A.5+ — FHIR read, workflow-benchmark, history, merge
+#### 3.8.6 Phase 4A.5 — FHIR Patient read (last backend slice before UI pivot)
 
-<!-- TODO(content): populated as each 4A sub-slice opens:
-     - 4A.5 (was 4A.4): GET /fhir/r4/Patient/{id} + US Core mapping
+**Wording discipline:** this slice ships a **minimal FHIR R4
+Patient mapping — US Core–influenced shape**, NOT a US Core
+v6.x profile-conformant implementation. Any text describing
+it as "US Core v6.x JSON" or similar is incorrect until the
+missing fields (race, ethnicity, telecom, address) land and
+are verified to meet profile requirements.
+
+**Last backend slice before the vertical-slice pivot.** After
+4A.5 ships, no new backend slice starts until a UI plan is
+approved and signed off. This forcing function is explicit
+in the 4A.5 commit body.
+
+- [ ] `com.medcore.clinical.patient.fhir.FhirPatient` — typed
+      FHIR R4 Patient DTO hierarchy (FhirMeta, FhirIdentifier,
+      FhirHumanName, FhirCodeableConcept, FhirCoding,
+      FhirExtension, FhirCommunication). Jackson-serialisable
+      directly to FHIR JSON. No HAPI library dependency.
+- [ ] `com.medcore.clinical.patient.fhir.PatientFhirMapper` —
+      strict DTO-based mapping from `PatientSnapshot` to
+      `FhirPatient`. No string building, no raw maps.
+- [ ] Mapped fields: resourceType, id, meta (versionId +
+      lastUpdated), identifier (MRN only — satellites
+      deferred), active, name (official + usual-preferred),
+      gender, birthDate, US Core birthsex + gender-identity
+      extensions (when source columns populated),
+      communication.language.
+- [ ] `com.medcore.clinical.patient.api.PatientFhirController`
+      — dedicated FHIR controller at `/fhir/r4/Patient`.
+      One endpoint: `GET /fhir/r4/Patient/{patientId}`.
+      Tenant via `X-Medcore-Tenant` header (same mechanism as
+      `/api/**`).
+- [ ] **Bare FHIR response body** (no `ApiResponse<T>`
+      wrapper) — deliberate exception to the canonical-
+      envelope rule. Documented narrowly in template §12.6.
+      `X-Request-Id` header as correlation substitute.
+- [ ] **Filter-chain extensions** — 7 edits across 5 files so
+      `/fhir/**` gets the same coverage as `/api/**`:
+  - `TenantContextFilter.shouldNotFilter` + registration
+    `addUrlPatterns`
+  - `PhiRequestContextFilter.shouldNotFilter` + registration
+    `addUrlPatterns`
+  - `MdcUserIdFilter.shouldNotFilter` + registration
+    `addUrlPatterns`
+  - `SecurityConfig.securityMatcher` now `("/api/**", "/fhir/**")`
+- [ ] **Zero new framework types.** Reuses ALL 4A.4 read-path
+      infrastructure: `ReadGate`, `GetPatientCommand`,
+      `GetPatientHandler`, `GetPatientAuditor`,
+      `CLINICAL_PATIENT_ACCESSED` audit action. No new
+      authority.
+- [ ] No new migrations.
+- [ ] No new error codes (existing 401/404/422/500 cover
+      everything).
+- [ ] Tests (21 new across 3 suites):
+  - `PatientFhirMapperTest` (13) — every mapped field, every
+    conditional emission (extensions only when source set,
+    communication only when language set, etc.), DELETED /
+    MERGED_AWAY → `active=false`.
+  - `GetPatientFhirIntegrationTest` (7) — 401 without bearer,
+    422 or 403 without tenant header, bare-body success,
+    tenant-scoped URN identifier, MEMBER can read, 404
+    unknown, 404 cross-tenant.
+  - `PatientFhirLogPhiLeakageTest` (1) — distinctive PHI
+    tokens never appear in stdout after FHIR GET.
+- [ ] **Explicit bare-FHIR test assertion** — the integration
+      test asserts the body does NOT contain `data` or
+      `requestId` keys (enforces the canonical-envelope
+      exception scope at CI time).
+- [ ] **PHI-exposure review** —
+      `docs/security/phi-exposure-review-4a-5.md`. Risk: Low.
+      10 attack-surface scenarios analysed (ApiResponse
+      wrapper leakage, filter-chain reordering, extension
+      value disclosure, etc.).
+- [ ] **Pattern template** bumped v1.2 → v1.3 with FHIR-
+      exception narrow scope in §12.6.
+- [ ] Existing 434 tests still green; total after 4A.5:
+      **455/455 across the full suite (+21)**.
+- [ ] **Post-4A.5 commitment in commit body:** no new
+      backend slice starts until a vertical-slice UI plan is
+      approved.
+- [ ] **Carry-forwards closed in 4A.5**:
+  - GET /fhir/r4/Patient/{id} (4A.2 carry-forward) — closed.
+- [ ] **Carry-forwards opened by 4A.5**:
+  - CF-4A5-1: Canonical identifier system URI (OID or
+    DNS-based).
+  - CF-4A5-2: Satellite identifier rendering in FHIR.
+  - CF-4A5-3: Gender-identity `valueCoding` upgrade.
+  - CF-4A5-4: US Core Patient v6.x profile conformance
+    (multi-slice).
+  - CF-4A5-5: FHIR search endpoint.
+  - CF-4A5-6: FHIR Bundle / CapabilityStatement / SMART.
+
+#### 3.8.7 Phase 4A.x+ — Address/contact history, encounter, notes, workflow-benchmark, merge
+
+<!-- TODO(content): populated as each 4A sub-slice opens.
+     NOTE: After 4A.5, the next slice is a VERTICAL SLICE
+     (frontend + first clinical workflow), NOT another
+     backend slice. No new backend-only phase starts until
+     the vertical-slice plan is approved.
+
      - 4A.3.1: Address + contact append-only history tables
      - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
      - 4A.N: Merge workflow (dedicated slice) -->
@@ -1941,10 +2038,11 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.4 — first PHI READ endpoint
-shipped: ReadGate substrate + CLINICAL_PATIENT_ACCESSED /
-AUTHZ_READ_DENIED audit actions + WriteResponse→ApiResponse
-canonical envelope + ArchUnit Rule 14. Template amended to
-v1.2 with §12 "Read path". 434/434 across the full suite).
+*Last reviewed: 2026-04-23 (Phase 4A.5 — first FHIR wire-shape
+endpoint shipped: minimal FHIR R4 Patient mapping, US Core–
+influenced shape. Bare FHIR response body + narrow canonical-
+envelope exception (§12.6). Pattern template v1.2 → v1.3.
+Last backend slice before UI pivot — no further backend until
+vertical-slice plan approved. 455/455 across the full suite).
 Next review: 2026-05-25, or on the next phase opening
 (whichever is sooner).*

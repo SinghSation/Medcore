@@ -1,15 +1,17 @@
-# Clinical Write + Read Pattern — v1.2
+# Clinical Write + Read Pattern — v1.3
 
 **Status:** NORMATIVE as of Phase 4A.2 (v1.0); amended 4A.3 (v1.1);
-amended 4A.4 (v1.2) to cover the read path.
+amended 4A.4 (v1.2); amended 4A.5 (v1.3) to codify the
+canonical-envelope exception for FHIR endpoints.
 **Reference implementations:** `com.medcore.clinical.patient.*`
 — patient demographics (4A.2) + patient identifiers (4A.3) +
-patient read (4A.4). See file map in §9.
+patient read (4A.4) + FHIR patient read (4A.5). See file map
+in §9.
 **Scope:** every future PHI-bearing write AND read surface
-(4A.5 FHIR mapping; 4B scheduling; 4C encounters; and beyond).
-**Change log:** §11 tracks revisions. v1.2 adds §12 "Read path"
-and related §10 checklist items — non-breaking additions to
-v1.0/v1.1 REQUIRED rules.
+(4B scheduling; 4C encounters; additional FHIR resources; and
+beyond).
+**Change log:** §11 tracks revisions. v1.3 narrowly codifies
+the FHIR bare-body exception — non-breaking.
 
 ---
 
@@ -852,6 +854,7 @@ code is the canonical reference at v1.0.
 | 1.0 | 2026-04-23 | Initial extraction from 4A.2 | Phase 4A.2 stabilization |
 | 1.1 | 2026-04-23 | Three non-breaking additions: (a) §10 checklist prompt "new authority or reuse?"; (b) §7.2 clarification — `If-Match` scope is PHI PATCH only (not DELETE or POST); (c) §1.1 RLS delegation option documented + caveat on satellite role gating | Phase 4A.3 pattern-validation |
 | 1.2 | 2026-04-23 | New §12 "Read path" covers `ReadGate`, `ReadAuthzPolicy`, `ReadAuditor`, audit-atomic 200-only emission, and the not-read-only-tx rule. §10 checklist gains read-specific items (new AuditAction for reads, 200-only emission check, `AUTHZ_READ_DENIED` on policy denial, PHI-leakage test on GET). §7.1 gains a read-path symmetry note. Response-envelope canonical name: `ApiResponse<T>` (renamed from `WriteResponse<T>`). Non-breaking. | Phase 4A.4 read-path slice |
+| 1.3 | 2026-04-23 | §12.6 codifies the narrow `/fhir/r4/**` exception to the canonical-envelope rule: FHIR endpoints return bare spec-owned bodies; correlation moves to the `X-Request-Id` header; explicit CI-time assertion required that FHIR response bodies carry no `data` / `requestId` keys. Wording discipline added: "minimal FHIR R4 Patient mapping — US Core–influenced shape", NOT "US Core v6.x conformant" unless the missing fields (race, ethnicity, telecom, address) are delivered in the same commit. Non-breaking. | Phase 4A.5 FHIR slice |
 
 ---
 
@@ -950,6 +953,38 @@ minimises churn.
 canonical envelope. No per-operation subtypes
 (`ReadResponse<T>`, `WriteResponse<T>`, etc. are forbidden
 by this rule). Wire shape: `{"data": {...}, "requestId": "..."}`.
+
+**`[REQUIRED]` Narrow exception — FHIR endpoints** (v1.3,
+4A.5):
+
+Endpoints under the `/fhir/r4/**` namespace return **bare
+spec-owned response bodies** (the FHIR resource at the root,
+no `data` / `requestId` wrapper). FHIR R4 owns the wire
+shape; wrapping the body in `ApiResponse<T>` would produce
+output that no FHIR client can parse.
+
+Correlation substitute: bare-FHIR endpoints MUST emit the
+request id in an `X-Request-Id` HTTP response header. The
+canonical envelope's `requestId` field lives in the body;
+the FHIR exception moves it to the header. Semantically
+equivalent for correlation purposes.
+
+**Scope bar on the exception** — it applies ONLY to:
+- The `/fhir/r4/**` URL namespace (and any future `/fhir/<version>/**` additions)
+- Response bodies serialised FROM a FHIR spec shape
+
+Internal controllers, admin endpoints, error envelopes, and
+every non-FHIR surface continue to use `ApiResponse<T>`. Any
+future exception to the canonical envelope rule requires a
+pattern-template amendment (v1.N bump) with a scope bar as
+narrow as this one.
+
+Integration tests for FHIR endpoints MUST include an explicit
+assertion that the response body has NO `data` or `requestId`
+keys — this prevents a programming bug (e.g., a developer
+copy-pasting wrapper code from the native controller) from
+leaking the envelope into the FHIR namespace. See
+`GetPatientFhirIntegrationTest` as the reference.
 
 ### 12.7 ArchUnit Rule 14
 

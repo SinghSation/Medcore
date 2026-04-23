@@ -977,7 +977,13 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | V14 `clinical.patient_identifier` RLS write policies missing OWNER/ADMIN role gate (surfaced by 4A.3 pattern-validation) | 4A.3 | **4A.3** (closed — V17 tightens INSERT/UPDATE/DELETE policies to match V14's patient-write role gate) |
 | Partial UNIQUE index on `clinical.patient_identifier` — `WHERE valid_to IS NULL` — to allow re-add-after-revoke verbatim | 4A.3 | when a pilot clinic's workflow demands re-add-after-revoke (extremely rare in practice) |
 | Identifier UPDATE command (value/issuer change without revoke-readd, distinct shape from 4A.3's POST+DELETE) | 4A.3 | 4A.3.1 or later, if operator correction workflow demands it |
-| GET /fhir/r4/Patient/{id} + US Core mapping | 4A.2 / 4A.4 | **4A.5** (next — reorder from 4A.4) |
+| GET /fhir/r4/Patient/{id} + US Core mapping | 4A.2 / 4A.4 | **4A.5** (closed — minimal FHIR R4 Patient mapping, US Core–influenced shape; NOT US Core v6.x profile conformant) |
+| Canonical identifier system URI (OID or DNS-based) replacing `urn:medcore:tenant:{uuid}:mrn` | 4A.5 | when Medcore commits to a public identity-system namespace |
+| Satellite identifier rendering in FHIR (DRIVERS_LICENSE, INSURANCE_MEMBER, etc.) | 4A.5 | dedicated PHI-review slice |
+| Gender-identity FHIR extension `valueCoding` upgrade (from `valueString`) | 4A.5 | when SNOMED-coded input validation lands for gender_identity_code |
+| US Core Patient v6.x profile conformance (race, ethnicity, telecom, address, etc.) | 4A.5 | each missing field is its own slice; multi-slice effort |
+| FHIR search endpoint (GET /fhir/r4/Patient?...) with pagination + authz | 4A.5 | when an external integration demands it |
+| FHIR Bundle / CapabilityStatement / SMART launch | 4A.5 | when interop integration becomes a concrete goal |
 | Patient read endpoint + `CLINICAL_PATIENT_ACCESSED` audit infrastructure | 4A.2 / 4A.0 | **4A.4** (closed — ReadGate substrate + GET endpoint shipped) |
 | `If-None-Match` / 304 Not Modified for PHI GETs | 4A.4 | future slice if bandwidth matters |
 | Partial-read modes (summary vs full) on PHI reads with `mode:` audit reason token | 4A.4 | when clinical workflow demands summary-only reads |
@@ -988,9 +994,9 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.4 — first PHI READ endpoint:
-ReadGate substrate with audit-atomic 200-only emission +
-CLINICAL_PATIENT_ACCESSED / AUTHZ_READ_DENIED audit actions +
-WriteResponse→ApiResponse canonical envelope + ArchUnit Rule 14.
-Template amended to v1.2 with §12 "Read path". 434/434 tests
-green). Next review: 2026-07-25 (quarterly).*
+*Last reviewed: 2026-04-23 (Phase 4A.5 — first FHIR wire-shape
+endpoint: minimal FHIR R4 Patient mapping, US Core–influenced
+shape. Bare FHIR response body — narrow canonical-envelope
+exception (§12.6 template v1.3). Last backend slice before UI
+pivot; no new backend until vertical-slice plan approved.
+455/455 tests green). Next review: 2026-07-25 (quarterly).*

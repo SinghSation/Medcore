@@ -55,8 +55,14 @@ class TenantContextFilter(
     private val auditWriter: AuditWriter,
 ) : OncePerRequestFilter() {
 
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        !request.requestURI.startsWith("/api/")
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean {
+        // Phase 4A.5 — extend coverage to `/fhir/r4/**` so the
+        // same X-Medcore-Tenant header resolution applies to
+        // FHIR-native endpoints that live outside the `/api/`
+        // tree. No change to /api/** behaviour.
+        val uri = request.requestURI
+        return !uri.startsWith("/api/") && !uri.startsWith("/fhir/")
+    }
 
     override fun doFilterInternal(
         request: HttpServletRequest,

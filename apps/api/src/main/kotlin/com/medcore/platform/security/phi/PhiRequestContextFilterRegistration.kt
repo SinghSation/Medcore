@@ -46,7 +46,10 @@ class PhiRequestContextFilterRegistration {
         // tenant context is resolved before we try to pick up
         // `tenantContext.current()`.
         registration.order = SecurityProperties.DEFAULT_FILTER_ORDER + 20
-        registration.addUrlPatterns("/api/*")
+        // Phase 4A.5 — extend coverage to the FHIR namespace.
+        // Same holder-populate logic applies to /fhir/r4/**
+        // endpoints that reach PhiRlsTxHook in the read gate.
+        registration.addUrlPatterns("/api/*", "/fhir/*")
         registration.setName("phiRequestContextFilter")
         return registration
     }

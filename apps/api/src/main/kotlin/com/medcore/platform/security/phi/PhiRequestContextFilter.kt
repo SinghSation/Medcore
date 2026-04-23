@@ -69,8 +69,14 @@ class PhiRequestContextFilter(
     private val tenantContext: TenantContext,
 ) : OncePerRequestFilter() {
 
-    override fun shouldNotFilter(request: HttpServletRequest): Boolean =
-        !request.requestURI.startsWith("/api/")
+    override fun shouldNotFilter(request: HttpServletRequest): Boolean {
+        // Phase 4A.5 — extend coverage to `/fhir/r4/**`. FHIR-
+        // native endpoints still require the PhiRequestContext
+        // holder populated before `PhiRlsTxHook` runs inside
+        // the gate's tx; the filter logic is identical.
+        val uri = request.requestURI
+        return !uri.startsWith("/api/") && !uri.startsWith("/fhir/")
+    }
 
     override fun doFilterInternal(
         request: HttpServletRequest,

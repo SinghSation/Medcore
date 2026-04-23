@@ -62,7 +62,9 @@ class TenantContextFilterRegistration {
     ): FilterRegistrationBean<TenantContextFilter> {
         val registration = FilterRegistrationBean(filter)
         registration.order = SecurityProperties.DEFAULT_FILTER_ORDER + 10
-        registration.addUrlPatterns("/api/*")
+        // Phase 4A.5 — extend coverage to the FHIR namespace so
+        // tenant resolution applies to /fhir/r4/** endpoints too.
+        registration.addUrlPatterns("/api/*", "/fhir/*")
         registration.setName("tenantContextFilter")
         return registration
     }

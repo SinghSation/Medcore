@@ -31,7 +31,8 @@ class MdcUserIdFilterRegistration {
     ): FilterRegistrationBean<MdcUserIdFilter> {
         val registration = FilterRegistrationBean(filter)
         registration.order = SecurityProperties.DEFAULT_FILTER_ORDER + 5
-        registration.addUrlPatterns("/api/*")
+        // Phase 4A.5 — extend coverage to the FHIR namespace.
+        registration.addUrlPatterns("/api/*", "/fhir/*")
         registration.setName("mdcUserIdFilter")
         return registration
     }
