@@ -103,6 +103,35 @@ object ErrorCodes {
      */
     const val RESOURCE_CONFLICT: String = "resource.conflict"
 
+    /**
+     * Phase 4A.2: duplicate-patient warning on
+     * `POST /api/v1/tenants/{slug}/patients`. Emitted when the
+     * `DuplicatePatientDetector` surfaces candidate matches
+     * (exact-name + DOB or phonetic-name + DOB) and the caller did
+     * NOT set `X-Confirm-Duplicate: true`. `details.candidates`
+     * carries `[{patientId, mrn}]` — minimal disclosure, no
+     * name/DOB/demographics. Client retries with the header after
+     * confirming the patient is genuinely distinct.
+     *
+     * Distinct code (not `resource.conflict`) because the retry
+     * contract differs: clients retry this by adding a header, not
+     * by re-fetching state.
+     */
+    const val CLINICAL_PATIENT_DUPLICATE_WARNING: String =
+        "clinical.patient.duplicate_warning"
+
+    // --- 428 ---
+    /**
+     * Phase 4A.2: `If-Match` header missing on a conditional
+     * request (RFC 7232). Medcore requires `If-Match` on
+     * `PATCH /api/v1/tenants/{slug}/patients/{id}` and every future
+     * PHI-bearing PATCH — blind overwrites of PHI are disallowed.
+     * 428 lets the client distinguish "you forgot the header"
+     * from "you sent a stale version" (which maps to 409
+     * `resource.conflict`).
+     */
+    const val PRECONDITION_REQUIRED: String = "request.precondition_required"
+
     // --- 422 ---
     /**
      * Request is syntactically valid but semantically invalid. Bean-

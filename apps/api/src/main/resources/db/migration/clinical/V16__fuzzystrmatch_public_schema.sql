@@ -1,0 +1,54 @@
+-- V16__fuzzystrmatch_public_schema.sql — Phase 4A.2
+--
+-- Moves the `fuzzystrmatch` extension (installed by V14) into the
+-- `public` schema so `medcore_app` can call `soundex(...)` at
+-- runtime.
+--
+-- ### Why this is needed
+--
+-- V14 installed `fuzzystrmatch` without an explicit `WITH SCHEMA`
+-- clause. Postgres installs extensions into the first schema of
+-- the session's `search_path` that the caller has CREATE on —
+-- for Flyway (running with `default-schema: flyway` per
+-- `application.yaml`), that's `flyway`. `soundex` ended up at
+-- `flyway.soundex`.
+--
+-- At runtime, `medcore_app` has the default role-level search
+-- path `"$user", public`. It has no USAGE grant on `flyway`
+-- (that schema is reserved for Flyway internal state per
+-- ADR-006). An unqualified `soundex(...)` call in runtime SQL
+-- therefore fails with `function soundex(text) does not exist`.
+--
+-- V14's phonetic index (`ix_clinical_patient_tenant_soundex_family`)
+-- resolved `soundex` at creation time (migrator session had
+-- `flyway` in its search_path) — so the index exists and points
+-- to whichever soundex was in scope. After this V16 migration,
+-- `soundex` lives in `public`; `public.soundex` is fully
+-- accessible to `medcore_app`. The index's function reference is
+-- preserved by `ALTER EXTENSION SET SCHEMA` (Postgres rewrites
+-- dependent objects automatically).
+--
+-- ### Runtime-query discipline
+--
+-- `DuplicatePatientDetector` qualifies `soundex` as `public.soundex`
+-- (Phase 4A.2). Future clinical queries using fuzzystrmatch
+-- functions MUST follow the same qualification convention — an
+-- unqualified call is a portability bug waiting to surface the
+-- first time someone runs Medcore against a Postgres cluster
+-- with a different role-level search path.
+--
+-- ### Rollback
+--
+-- `ALTER EXTENSION fuzzystrmatch SET SCHEMA flyway` would restore
+-- the prior state, but the only consumer (4A.2's phonetic index +
+-- detector) has already re-pointed to `public.soundex`. Forward-
+-- only from here.
+
+ALTER EXTENSION fuzzystrmatch SET SCHEMA public;
+
+-- `soundex` is now `public.soundex`. Grant EXECUTE so medcore_app
+-- can call it at runtime. (medcore_app already has USAGE on the
+-- `public` schema implicitly — Postgres grants all roles USAGE
+-- on `public` by default — so the function itself needs the
+-- explicit EXECUTE grant to be callable.)
+GRANT EXECUTE ON FUNCTION public.soundex(text) TO medcore_app;

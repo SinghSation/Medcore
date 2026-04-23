@@ -1598,15 +1598,146 @@ is dormant until 4A.2 wires the WriteGate perimeter.
       4A.0 note, tracked to close with 4A.2 — it is NOT a
       4A.1 carry-forward.)
 
-#### 3.8.3 Phase 4A.2+ — Patient writes, reads, FHIR, history, merge
+#### 3.8.3 Phase 4A.2 — First PHI write path (create + update)
+
+Medcore's first REAL PHI write surface. Closes the ArchUnit
+Rule 13 `.allowEmptyShould(true)` allowance opened in 4A.0.
+Proves the 4A.0 substrate + 4A.1 schema compose into a
+defense-in-depth perimeter under real end-to-end HTTP traffic.
+
+- [ ] `V15__patient_mrn_counter.sql` — per-tenant MRN counter
+      table with both-GUCs RLS + FK to `tenancy.tenant` +
+      CHECK-constrained `format_kind` (extensibility point
+      for future `ALPHANUMERIC` / `CHECK_DIGIT_MOD10`).
+- [ ] `V16__fuzzystrmatch_public_schema.sql` — moves the
+      `fuzzystrmatch` extension to `public` so `medcore_app`
+      can call `public.soundex(...)` at runtime for phonetic
+      duplicate detection. Defines the qualification
+      discipline for future clinical SQL.
+- [ ] `MrnGenerator` — atomic `INSERT ... ON CONFLICT DO UPDATE
+      ... RETURNING` upsert. Monotonic per tenant. Rollback-
+      safe (counter bump rolls back with the enclosing tx).
+      Runs inside caller's tx (enforced via `check
+      (isActualTransactionActive())`).
+- [ ] **MRN format extensibility** — `MrnFormatKind` closed
+      enum + `format_kind` column design so future
+      alphanumeric / check-digit schemes add as branches in
+      the generator without schema churn on patient rows.
+- [ ] `CreatePatientCommand` write stack through 3J.1
+      WriteGate using 4A.0 `PhiRlsTxHook`:
+      Command → Validator (domain checks Bean Validation
+      can't express) → AuthzPolicy (`PATIENT_CREATE` gate) →
+      Handler (dup-detect + MRN mint + save) →
+      Auditor (`PATIENT_CREATED` action).
+- [ ] `UpdatePatientDemographicsCommand` write stack:
+      Command + `Patchable<T>` three-state partial semantics
+      → Validator (refuses `Clear` on required columns,
+      validates Set values) → Policy (`PATIENT_UPDATE` gate)
+      → Handler (load + `If-Match` compare + apply patches +
+      no-op detect) → Auditor (`PATIENT_DEMOGRAPHICS_UPDATED`
+      action with `fields:` slug — field names only, no
+      values).
+- [ ] `DuplicatePatientDetector` (first `..clinical..service..`
+      class): exact match via
+      `ix_clinical_patient_tenant_dob_family_given`, phonetic
+      via `ix_clinical_patient_tenant_soundex_family` using
+      qualified `public.soundex(...)`. Minimal-disclosure
+      candidate shape (`{patientId, mrn}` only — never
+      name/DOB).
+- [ ] `X-Confirm-Duplicate: true` bypass header on the
+      create endpoint. Default behaviour: 409 warning on
+      match. Retry with header skips detection.
+- [ ] **Three-state PATCH semantics** via `Patchable<T>` sealed
+      class (`Absent` / `Clear` / `Set<T>`). Jackson binds
+      body as `JsonNode`; mapper walks the tree. Only
+      whitelisted fields reachable from PATCH (`mrn`, `status`,
+      `merged_*`, `created_*`, `row_version` are NOT
+      patchable).
+- [ ] **`If-Match` header REQUIRED on PATCH.** Missing → 428
+      `request.precondition_required` via
+      `PreconditionRequiredException`. Stale → 409
+      `resource.conflict` with `details.reason = stale_row`.
+      Wildcard (`*`) rejected.
+- [ ] `PatientController` at `/api/v1/tenants/{slug}/patients`
+      — POST + PATCH only. GET deferred to 4A.5 (bundled
+      with read-audit).
+- [ ] `PatientWriteConfig` — first bean-wiring consumer of
+      `PhiRlsTxHook`. Proves 4A.0 substrate composes with
+      a real handler.
+- [ ] New error codes: `clinical.patient.duplicate_warning`
+      (409) + `request.precondition_required` (428). Registry
+      discipline followed (entry in `ErrorCodes` +
+      `@ExceptionHandler` in `GlobalExceptionHandler` + test
+      coverage + review-pack callout).
+- [ ] New `AuditAction` entries: `PATIENT_CREATED` +
+      `PATIENT_DEMOGRAPHICS_UPDATED`. Both carry NORMATIVE
+      audit-row shape contracts on their auditor KDocs.
+      Denial paths use existing `AUTHZ_WRITE_DENIED` with
+      clinical-scope reason slugs.
+- [ ] **ArchUnit Rule 13 ACTIVATED** —
+      `.allowEmptyShould(true)` removed.
+      `DuplicatePatientDetector` is the first real
+      consumer. Rule narrowed to `@Component`-annotated
+      classes in `..clinical..service..` so exception + data
+      classes in the package don't false-positive.
+- [ ] `FlywayMigrationStateCheck.MIN_EXPECTED_INSTALLED_RANK`
+      bumped 14 → 16 so stale-schema deployments refuse to
+      start.
+- [ ] Tests (32 new in 4A.2, across 6 new suites):
+  - `MrnGeneratorTest` (5): bootstrap, monotonic, tenant-
+    isolated, rollback-safety (tx fails → counter not
+    consumed) ×2.
+  - `CreatePatientIntegrationTest` (11): HTTP→DB happy
+    path, OWNER / ADMIN / MEMBER role matrix, filter-level
+    SUSPENDED / no-membership denials, cross-tenant block,
+    missing-required + in-future DOB + invalid wire-value
+    validation.
+  - `UpdatePatientDemographicsIntegrationTest` (9): happy
+    path with `row_version` bump, 428 missing If-Match,
+    409 stale If-Match, null-clears-nullable,
+    null-on-required → 422, empty-body 422, no-op
+    suppression, cross-tenant 404, MEMBER denial with
+    PATCH-specific denial reason slug.
+  - `DuplicatePatientWarningTest` (5): exact-match 409,
+    phonetic-match 409 (proves V16 relocation works),
+    `X-Confirm-Duplicate` bypass 201, no-match 201,
+    rollback-safe counter on dup warning.
+  - `PatientCreateConcurrencyTest` (1): **50 parallel
+    creates** yield 50 distinct contiguous MRNs with no
+    gaps; counter advances exactly 50.
+  - `PatientLogPhiLeakageTest` (1): no PHI tokens (names,
+    DOB, language) appear in captured stdout after
+    POST + PATCH. Extends 3F.1 LogPhiLeakageTest.
+- [ ] **19 existing test resets updated** to wipe
+      `clinical.patient_mrn_counter` before
+      `tenancy.tenant_membership` — FK-dependency-order
+      cleanup. No behavioural change to any existing test.
+- [ ] **PHI-exposure review** — `docs/security/phi-exposure-
+      review-4a-2.md`. Risk determination: Low. First
+      slice with reachable PHI; three-layer defence-in-depth
+      verified. Attack-surface analysis covers 12 scenarios
+      including concurrency, rollback, cross-tenant probing,
+      duplicate-warning enumeration, If-Match forgery, and
+      payload-size DoS.
+- [ ] Existing 358 tests still green; total after 4A.2:
+      **390/390 across the full suite (+32)**.
+- [ ] **Carry-forward closed in 4A.2**:
+  - ArchUnit Rule 13 `.allowEmptyShould(true)` allowance
+    (4A.0 → **4A.2**).
+- [ ] **Carry-forward opened by 4A.2**:
+  - Rate-limiting on duplicate-warning queries (future
+    hardening slice when abuse observed).
+  - IMPORTED MRN path + collision-retry (when a pilot
+    clinic with legacy data demands it).
+  - Real `Idempotency-Key` dedupe persistence (4A.2.1
+    hardening OR 6A Stripe-webhook flow).
+
+#### 3.8.4 Phase 4A.3+ — Address/contact history, FHIR read, read audit, merge
 
 <!-- TODO(content): populated as each 4A sub-slice opens:
-     - 4A.2: CreatePatientCommand + UpdatePatientDemographicsCommand
-       through WriteGate, duplicate-warning on create,
-       PatientService (closes ArchUnit Rule 13 allowance)
-     - 4A.3: Address + contact append-only history
+     - 4A.3: Address + contact append-only history tables
      - 4A.4: GET /fhir/r4/Patient/{id} + US Core mapping
-     - 4A.5: Read auditing (CLINICAL_PATIENT_ACCESSED action)
+     - 4A.5: Read endpoint + read auditing (CLINICAL_PATIENT_ACCESSED)
      - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
      - 4A.N: Merge workflow (dedicated slice) -->
 
@@ -1630,9 +1761,9 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.1 — first PHI-bearing SQL
-surface shipped: clinical.patient + clinical.patient_identifier
-+ both-GUCs RLS + PATIENT_* authorities + JPA entities; no
-application reachability yet — WriteGate perimeter + service
-layer land in 4A.2. 358/358 across 66 suites). Next review:
+*Last reviewed: 2026-04-23 (Phase 4A.2 — FIRST REAL PHI WRITE
+PATH shipped: POST + PATCH /patients through WriteGate +
+PhiRlsTxHook + duplicate detection + 50-parallel concurrency
+proof + If-Match enforcement with 428/409 semantics; ArchUnit
+Rule 13 activated. 390/390 across the full suite). Next review:
 2026-05-25, or on the next phase opening (whichever is sooner).*

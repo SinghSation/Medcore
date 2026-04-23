@@ -105,18 +105,19 @@ class FlywayMigrationStateCheck(private val dataSource: DataSource) {
          * every migration baked into this build's resources.
          *
          * Migration IDs in the `db/migration` tree:
-         *   V1..V14 at time of Phase 4A.1 (V14 establishes the
-         *   clinical schema + `clinical.patient` + `patient_identifier`
-         *   + RLS policies keying on both tenant_id and user_id
-         *   GUCs + duplicate-detection-aware indexes + fuzzystrmatch
-         *   extension). After V14 applies, the history table's
-         *   `installed_rank` reaches 14.
+         *   V1..V16 at time of Phase 4A.2 (V15 adds the per-tenant
+         *   MRN counter table `clinical.patient_mrn_counter` for
+         *   monotonic, rollback-safe MRN minting; V16 moves the
+         *   `fuzzystrmatch` extension from `flyway` to `public` so
+         *   `medcore_app` can call `soundex(...)` at runtime for
+         *   phonetic duplicate detection). After V16 applies, the
+         *   history table's `installed_rank` reaches 16.
          *
          * Bump this constant whenever a new VN migration lands (the
          * `safe-db-migration` skill in `.claude/skills/` carries this
          * as step N of the migration checklist).
          */
-        const val MIN_EXPECTED_INSTALLED_RANK: Int = 14
+        const val MIN_EXPECTED_INSTALLED_RANK: Int = 16
     }
 }
 

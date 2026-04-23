@@ -47,6 +47,7 @@ class AuditWriteObservationTest {
     @BeforeEach
     fun reset() {
         JdbcTemplate(adminDataSource).update("DELETE FROM audit.audit_event")
+        JdbcTemplate(adminDataSource).update("DELETE FROM clinical.patient_mrn_counter")
         JdbcTemplate(adminDataSource).update("DELETE FROM clinical.patient_identifier")
         JdbcTemplate(adminDataSource).update("DELETE FROM clinical.patient")
         JdbcTemplate(adminDataSource).update("DELETE FROM tenancy.tenant_membership")

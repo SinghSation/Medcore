@@ -1,5 +1,6 @@
 package com.medcore.platform.api
 
+import com.medcore.clinical.patient.service.DuplicatePatientWarningException
 import com.medcore.platform.write.WriteConflictException
 import com.medcore.platform.write.WriteValidationException
 import com.medcore.tenancy.context.TenantContextMissingException
@@ -257,6 +258,53 @@ class GlobalExceptionHandler {
             ErrorResponses.of(
                 code = ErrorCodes.RESOURCE_CONFLICT,
                 message = "The resource was modified by another request. Retry with the latest version.",
+            ),
+        )
+
+    /**
+     * Phase 4A.2: duplicate-patient warning on patient create.
+     * `details.candidates` carries `[{patientId, mrn}]` — minimal
+     * disclosure. Clients retry with `X-Confirm-Duplicate: true`
+     * after verifying the candidate is a genuinely different
+     * patient. Deliberately distinct from `resource.conflict`
+     * because the retry contract differs.
+     */
+    @ExceptionHandler(DuplicatePatientWarningException::class)
+    fun onDuplicatePatientWarning(
+        ex: DuplicatePatientWarningException,
+    ): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(
+            ErrorResponses.of(
+                code = ErrorCodes.CLINICAL_PATIENT_DUPLICATE_WARNING,
+                message = "A candidate duplicate patient already exists. Confirm " +
+                    "by resending the request with the X-Confirm-Duplicate: true header.",
+                details = mapOf(
+                    "candidates" to ex.candidates.map { candidate ->
+                        mapOf(
+                            "patientId" to candidate.patientId.toString(),
+                            "mrn" to candidate.mrn,
+                        )
+                    },
+                ),
+            ),
+        )
+
+    // --- 428 Precondition Required ---
+
+    /**
+     * Phase 4A.2: `If-Match` header missing on a required-conditional
+     * PATCH. 428 distinguishes "you forgot the header" from 409
+     * "you sent a stale version". See [PreconditionRequiredException]
+     * KDoc for the full rationale.
+     */
+    @ExceptionHandler(PreconditionRequiredException::class)
+    fun onPreconditionRequired(
+        ex: PreconditionRequiredException,
+    ): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.PRECONDITION_REQUIRED).body(
+            ErrorResponses.of(
+                code = ErrorCodes.PRECONDITION_REQUIRED,
+                message = "A required precondition header is missing.",
             ),
         )
 

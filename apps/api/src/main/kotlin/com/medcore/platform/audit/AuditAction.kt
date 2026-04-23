@@ -136,6 +136,57 @@ enum class AuditAction(val code: String) {
      * memberships (handler returns `changed = false`).
      */
     TENANCY_MEMBERSHIP_REVOKED("tenancy.membership.revoked"),
+
+    // --- Phase 4A.2: clinical patient writes (first PHI-bearing actions) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/patients` when an OWNER/ADMIN
+     * creates a new `clinical.patient` row (Phase 4A.2, first
+     * PHI-bearing action in Medcore).
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.write.CreatePatientAuditor]:
+     *   - `actor_type` = USER
+     *   - `actor_id` = caller userId
+     *   - `tenant_id` = target tenant UUID
+     *   - `resource_type` = `"clinical.patient"`
+     *   - `resource_id` = newly-minted patient UUID
+     *   - `outcome` = SUCCESS
+     *   - `reason` = `intent:clinical.patient.create|mrn_source:GENERATED`
+     *
+     * **No PHI in the `reason` slug.** Patient name, DOB, and
+     * demographic fields do NOT appear. The reason carries only
+     * closed-enum tokens (`mrn_source` ∈ {GENERATED, IMPORTED}).
+     * Forensic linkage to the specific patient goes through
+     * `resource_id` (the UUID) — not via any identifying payload
+     * in the audit row itself.
+     *
+     * No no-op suppression: creates are always persisted changes.
+     */
+    PATIENT_CREATED("clinical.patient.created"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `PATCH /api/v1/tenants/{slug}/patients/{id}` when an
+     * OWNER/ADMIN updates demographic fields (Phase 4A.2).
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.patient.write.UpdatePatientDemographicsAuditor]:
+     *   - `resource_type` = `"clinical.patient"`
+     *   - `resource_id` = target patient UUID
+     *   - `reason` = `intent:clinical.patient.update_demographics|fields:<comma-sep-names>`
+     *
+     * **`fields` is the list of PATCH-ed field NAMES only**
+     * (closed set from the DTO: `nameGiven`, `nameFamily`,
+     * `birthDate`, `administrativeSex`, etc.) — never the
+     * new values. Old/new value diffing waits for the Phase 7
+     * audit-schema-evolution ADR (currently tracked as a
+     * carry-forward).
+     *
+     * Suppressed for no-op writes (PATCH with every field
+     * unchanged).
+     */
+    PATIENT_DEMOGRAPHICS_UPDATED("clinical.patient.demographics_updated"),
 }
 
 /**

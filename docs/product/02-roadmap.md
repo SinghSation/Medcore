@@ -969,12 +969,17 @@ Items the roadmap inherits from Phases 0–3E and where they close:
 | `actor_role` snapshot column on `audit.audit_event` — capture caller's role at audit time to avoid historical-join drift on `tenant_membership` role changes | 3J.3 | **Phase 7** (bundled with the audit-payload-diff schema evolution ADR) |
 | Deferred CHECK trigger at commit time for last-OWNER invariant (closes phantom-INSERT window of pessimistic-lock approach) | 3J.N | **Phase 7 or earlier** if needed |
 | Structured `from_role`/`to_role` audit columns for membership role changes (currently encoded in `reason` as closed-enum tokens) | 3J.N | **Phase 7** (audit-schema-evolution ADR) |
+| ArchUnit Rule 13 `.allowEmptyShould(true)` allowance (first `..clinical..service..` consumer required) | 4A.0 | **4A.2** (closed — `DuplicatePatientDetector` is the first `@Component`-annotated clinical service class with real `PhiSessionContext` dependency; rule narrowed to `@Component` classes to exclude exception/data class noise) |
+| Rate-limiting on duplicate-patient-warning endpoint (enumeration mitigation on top of authority + minimal-disclosure gates) | 4A.2 | future hardening slice when abuse observed |
+| IMPORTED MRN path + collision-retry loop against `uq_clinical_patient_tenant_mrn` | 4A.2 | when a pilot clinic with legacy data demands it |
+| Real `Idempotency-Key` dedupe persistence + replay (shape-only since 3J.1; patient-create is the first consumer that could drive this) | 3J.1 / 4A.2 | **4A.2.1 hardening slice or 6A Stripe-webhook flow** |
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.1 — first PHI-bearing
-SQL surface: clinical.patient + clinical.patient_identifier +
-both-GUCs RLS + PATIENT_* authorities + JPA entities; no
-application reachability until 4A.2 wires the WriteGate
-perimeter). Next review: 2026-07-25 (quarterly). Review
+*Last reviewed: 2026-04-23 (Phase 4A.2 — first REAL PHI write
+path: POST + PATCH /patients through WriteGate + PhiRlsTxHook;
+V15 per-tenant MRN counter with atomic upsert + rollback
+safety; V16 fuzzystrmatch relocation for runtime phonetic
+duplicate detection; ArchUnit Rule 13 activated; 390/390
+tests green). Next review: 2026-07-25 (quarterly). Review
 cadence aligned with competitive-landscape review cadence.*

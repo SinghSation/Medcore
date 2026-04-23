@@ -82,6 +82,8 @@ class MedcoreApiApplicationTests {
                 Row("12", "V12__tenancy_rls_write_policies.sql", true),
                 Row("13", "V13__tenancy_membership_rls_admin_read.sql", true),
                 Row("14", "V14__clinical_patient_schema.sql", true),
+                Row("15", "V15__patient_mrn_counter.sql", true),
+                Row("16", "V16__fuzzystrmatch_public_schema.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",
