@@ -76,24 +76,6 @@ class CancelEncounterHandler(
         } catch (ex: OptimisticLockingFailureException) {
             throw WriteConflictException("encounter_already_closed", ex)
         }
-        return toSnapshot(saved)
+        return EncounterSnapshot.from(saved)
     }
-
-    private fun toSnapshot(entity: EncounterEntity): EncounterSnapshot =
-        EncounterSnapshot(
-            id = entity.id,
-            tenantId = entity.tenantId,
-            patientId = entity.patientId,
-            status = entity.status,
-            encounterClass = entity.encounterClass,
-            startedAt = entity.startedAt,
-            finishedAt = entity.finishedAt,
-            cancelledAt = entity.cancelledAt,
-            cancelReason = entity.cancelReason,
-            createdAt = entity.createdAt,
-            updatedAt = entity.updatedAt,
-            createdBy = entity.createdBy,
-            updatedBy = entity.updatedBy,
-            rowVersion = entity.rowVersion,
-        )
 }

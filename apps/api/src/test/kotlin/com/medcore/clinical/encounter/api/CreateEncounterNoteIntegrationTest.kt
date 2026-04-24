@@ -320,7 +320,7 @@ class CreateEncounterNoteIntegrationTest {
         encounterId: UUID,
         body: String,
     ): UUID {
-        val resp = post("alice", "acme-health", encounterId, """{"body":"$body"}""")
+        val resp = post(subject, "acme-health", encounterId, """{"body":"$body"}""")
         @Suppress("UNCHECKED_CAST")
         val data = resp.body!!["data"] as Map<String, Any>
         return UUID.fromString(data["id"] as String)
