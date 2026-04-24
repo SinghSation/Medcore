@@ -8,12 +8,21 @@ export type EncounterStatus =
 
 export type EncounterClass = 'AMB'
 
+export type CancelReason =
+  | 'NO_SHOW'
+  | 'PATIENT_DECLINED'
+  | 'SCHEDULING_ERROR'
+  | 'OTHER'
+
 /**
  * Wire shape of `EncounterResponse` from
- * `POST /patients/{id}/encounters` + `GET /encounters/{id}`.
+ * `POST /patients/{id}/encounters`, `GET /encounters/{id}`,
+ * `POST .../finish`, and `POST .../cancel`.
  *
- * Optional timestamps (`startedAt`, `finishedAt`) may be absent
- * when the API omits them (`@JsonInclude(NON_NULL)`).
+ * Optional fields are absent when the API omits them
+ * (`@JsonInclude(NON_NULL)`):
+ *   - `startedAt`, `finishedAt` — encounter-lifecycle timestamps.
+ *   - `cancelledAt`, `cancelReason` — present ⇔ status=CANCELLED.
  */
 export interface Encounter {
   id: string
@@ -23,6 +32,8 @@ export interface Encounter {
   encounterClass: EncounterClass
   startedAt?: string
   finishedAt?: string
+  cancelledAt?: string
+  cancelReason?: CancelReason
   createdAt: string
   updatedAt: string
   createdBy: string
@@ -93,6 +104,75 @@ export async function listPatientEncounters(
   return apiFetch<EncounterList>(
     `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/patients/${encodeURIComponent(patientId)}/encounters`,
     {
+      tenantSlug,
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  )
+}
+
+export interface FinishEncounterParams {
+  tenantSlug: string
+  encounterId: string
+  signal?: AbortSignal
+}
+
+/**
+ * Finish an encounter (Phase 4C.5). POST to `/finish` —
+ * HL7 FHIR action-style URL for state transitions. No request
+ * body.
+ *
+ * - 200 → returns the finished `Encounter` with `status:
+ *   'FINISHED'` and `finishedAt` populated.
+ * - 403 → caller lacks `ENCOUNTER_WRITE`.
+ * - 409 `resource.conflict` with
+ *   `details.reason: encounter_already_closed` → double-finish
+ *   or finishing a CANCELLED encounter.
+ * - 409 `resource.conflict` with
+ *   `details.reason: encounter_has_no_signed_notes` →
+ *   precondition unmet; the encounter has no signed notes.
+ */
+export async function finishEncounter(
+  params: FinishEncounterParams,
+): Promise<Encounter> {
+  const { tenantSlug, encounterId, signal } = params
+  return apiFetch<Encounter>(
+    `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/encounters/${encodeURIComponent(encounterId)}/finish`,
+    {
+      method: 'POST',
+      tenantSlug,
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  )
+}
+
+export interface CancelEncounterParams {
+  tenantSlug: string
+  encounterId: string
+  cancelReason: CancelReason
+  signal?: AbortSignal
+}
+
+/**
+ * Cancel an encounter (Phase 4C.5). POST to `/cancel` with a
+ * closed-enum reason.
+ *
+ * - 200 → returns the cancelled `Encounter` with `status:
+ *   'CANCELLED'`, `cancelledAt`, `cancelReason` populated.
+ * - 403 → caller lacks `ENCOUNTER_WRITE`.
+ * - 409 `resource.conflict` with
+ *   `details.reason: encounter_already_closed` → cancelling
+ *   an already-closed encounter.
+ * - 422 → missing or unknown `cancelReason`.
+ */
+export async function cancelEncounter(
+  params: CancelEncounterParams,
+): Promise<Encounter> {
+  const { tenantSlug, encounterId, cancelReason, signal } = params
+  return apiFetch<Encounter>(
+    `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/encounters/${encodeURIComponent(encounterId)}/cancel`,
+    {
+      method: 'POST',
+      body: { cancelReason },
       tenantSlug,
       ...(signal !== undefined ? { signal } : {}),
     },

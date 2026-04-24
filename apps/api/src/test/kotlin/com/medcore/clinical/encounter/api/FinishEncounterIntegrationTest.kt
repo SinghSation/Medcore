@@ -8,6 +8,7 @@ import javax.sql.DataSource
 import no.nav.security.mock.oauth2.MockOAuth2Server
 import no.nav.security.mock.oauth2.token.DefaultOAuth2TokenCallback
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -25,23 +26,15 @@ import org.springframework.jdbc.core.JdbcTemplate
 
 /**
  * End-to-end coverage for
- * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
- * (Phase 4D.1, VS1 Chunk E). First clinical-documentation write.
+ * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/finish`
+ * (Phase 4C.5).
  *
- * Proves:
- *   1. Happy path: 201 + body + ETag + ONE
- *      `CLINICAL_ENCOUNTER_NOTE_CREATED` audit row,
- *      reason = "intent:clinical.encounter.note.create".
- *   2. Append-only: two POSTs produce two rows with distinct ids.
- *   3. 422 on empty body (both "" and "   ").
- *   4. 422 on body > 20,000 chars.
- *   5. 403 when MEMBER (no NOTE_WRITE).
- *   6. 404 on unknown / cross-tenant encounter (no existence leak).
- *   7. Audit reason never contains the body text (PHI discipline).
+ * Proves the FINISH-requires-signed-note invariant plus the
+ * usual state-machine identity discipline (404, 403, 409).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration::class)
-class CreateEncounterNoteIntegrationTest {
+class FinishEncounterIntegrationTest {
 
     @Autowired lateinit var rest: TestRestTemplate
     @Autowired lateinit var mockOAuth2Server: MockOAuth2Server
@@ -67,187 +60,186 @@ class CreateEncounterNoteIntegrationTest {
     }
 
     @Test
-    fun `OWNER creates a note — 201 + body + ETag + ONE CLINICAL_ENCOUNTER_NOTE_CREATED audit`() {
+    fun `OWNER finishes with 1 signed note — 200 + FINISHED + ONE finished audit`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        val noteId = createNote("alice", "acme-health", encounterId, "n")
+        signNote("alice", "acme-health", encounterId, noteId)
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val body = "SOAP-ish: chief complaint, resolves with rest."
-        val resp = post(
-            "alice",
-            "acme-health",
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val data = resp.body!!["data"] as Map<String, Any>
+        assertThat(data["status"]).isEqualTo("FINISHED")
+        assertThat(data["finishedAt"]).isNotNull()
+
+        val row = jdbc.queryForMap(
+            "SELECT status, finished_at FROM clinical.encounter WHERE id = ?",
             encounterId,
-            """{"body":${jsonString(body)}}""",
         )
+        assertThat(row["status"]).isEqualTo("FINISHED")
+        assertThat(row["finished_at"]).isNotNull()
 
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.CREATED)
-        assertThat(resp.headers.eTag).isEqualTo("\"0\"")
-        val data = resp.body!!["data"] as Map<*, *>
-        assertThat(data["body"]).isEqualTo(body)
-        assertThat(data["encounterId"]).isEqualTo(encounterId.toString())
-
-        val audit = auditRows("clinical.encounter.note.created")
-        assertThat(audit).hasSize(1)
-        val row = audit.single()
-        assertThat(row["reason"]).isEqualTo("intent:clinical.encounter.note.create")
-        assertThat(row["resource_type"]).isEqualTo("clinical.encounter.note")
-        assertThat(row["resource_id"]).isEqualTo(data["id"])
-        assertThat(row["outcome"]).isEqualTo("SUCCESS")
+        val audit = auditRows("clinical.encounter.finished").single()
+        assertThat(audit["reason"]).isEqualTo("intent:clinical.encounter.finish")
+        assertThat(audit["resource_type"]).isEqualTo("clinical.encounter")
+        assertThat(audit["resource_id"]).isEqualTo(encounterId.toString())
+        assertThat(audit["outcome"]).isEqualTo("SUCCESS")
     }
 
     @Test
-    fun `append-only — two POSTs produce two distinct rows`() {
-        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-
-        val r1 = post("alice", "acme-health", encounterId, """{"body":"first note"}""")
-        val r2 = post("alice", "acme-health", encounterId, """{"body":"second note"}""")
-
-        assertThat(r1.statusCode).isEqualTo(HttpStatus.CREATED)
-        assertThat(r2.statusCode).isEqualTo(HttpStatus.CREATED)
-        val id1 = (r1.body!!["data"] as Map<*, *>)["id"]
-        val id2 = (r2.body!!["data"] as Map<*, *>)["id"]
-        assertThat(id1).isNotEqualTo(id2)
-        assertThat(
-            jdbc.queryForObject(
-                "SELECT COUNT(*) FROM clinical.encounter_note",
-                Long::class.java,
-            ),
-        ).isEqualTo(2)
-    }
-
-    @Test
-    fun `ADMIN can create a note — 201`() {
+    fun `ADMIN can finish — 200`() {
         val owner = provisionUser("owner")
         val admin = provisionUser("alice")
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, owner, role = "OWNER")
         seedMembership(tenant, admin, role = "ADMIN")
         val patientId = createPatient("owner", "acme-health")
-        val encounterId = createEncounter("owner", "acme-health", patientId)
+        val encounterId = createEncounterHttp("owner", "acme-health", patientId)
+        val noteId = createNote("owner", "acme-health", encounterId, "n")
+        signNote("owner", "acme-health", encounterId, noteId)
 
-        val resp = post("alice", "acme-health", encounterId, """{"body":"admin note"}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.CREATED)
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
     }
 
     @Test
-    fun `MEMBER cannot create a note — 403, no created audit, AUTHZ_WRITE_DENIED`() {
+    fun `MEMBER cannot finish — 403 + AUTHZ_WRITE_DENIED with finish intent`() {
         val owner = provisionUser("owner")
         val member = provisionUser("alice")
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, owner, role = "OWNER")
         seedMembership(tenant, member, role = "MEMBER")
         val patientId = createPatient("owner", "acme-health")
-        val encounterId = createEncounter("owner", "acme-health", patientId)
+        val encounterId = createEncounterHttp("owner", "acme-health", patientId)
+        val noteId = createNote("owner", "acme-health", encounterId, "n")
+        signNote("owner", "acme-health", encounterId, noteId)
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val resp = post("alice", "acme-health", encounterId, """{"body":"sneaky"}""")
+        val resp = postFinish("alice", "acme-health", encounterId)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.FORBIDDEN)
 
-        assertThat(auditRows("clinical.encounter.note.created")).isEmpty()
-        val denied = auditRows("authz.write.denied")
-        assertThat(denied).hasSize(1)
-        assertThat(denied.single()["reason"] as String)
-            .contains("intent:clinical.encounter.note.create")
+        assertThat(auditRows("clinical.encounter.finished")).isEmpty()
+        val denied = auditRows("authz.write.denied").single()
+        assertThat(denied["reason"] as String)
+            .contains("intent:clinical.encounter.finish")
             .contains("denial:")
     }
 
     @Test
-    fun `empty body — 422`() {
+    fun `finish with 0 notes — 409 encounter_has_no_signed_notes`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        val resp = post("alice", "acme-health", encounterId, """{"body":""}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        assertThat(resp.body!!["code"]).isEqualTo("resource.conflict")
+        @Suppress("UNCHECKED_CAST")
+        val details = resp.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_has_no_signed_notes")
+        assertThat(auditRows("clinical.encounter.finished")).isEmpty()
     }
 
     @Test
-    fun `whitespace-only body — 422`() {
+    fun `finish with only DRAFT notes — 409 encounter_has_no_signed_notes`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        val resp = post("alice", "acme-health", encounterId, """{"body":"   \n  \t "}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        createNote("alice", "acme-health", encounterId, "draft-1")
+        createNote("alice", "acme-health", encounterId, "draft-2")
+
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = resp.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_has_no_signed_notes")
     }
 
     @Test
-    fun `body longer than 20000 chars — 422`() {
+    fun `finish with 2 signed plus 1 draft — 200 (signed count greater than or equal to 1 is sufficient)`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        val huge = "x".repeat(20_001)
-        val resp = post("alice", "acme-health", encounterId, """{"body":"$huge"}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        val n1 = createNote("alice", "acme-health", encounterId, "a")
+        val n2 = createNote("alice", "acme-health", encounterId, "b")
+        createNote("alice", "acme-health", encounterId, "c-draft")
+        signNote("alice", "acme-health", encounterId, n1)
+        signNote("alice", "acme-health", encounterId, n2)
+
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
     }
 
     @Test
-    fun `unknown encounterId — 404, no note created, no created audit`() {
+    fun `double-finish — 409 encounter_already_closed, no second finished audit`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        val noteId = createNote("alice", "acme-health", encounterId, "n")
+        signNote("alice", "acme-health", encounterId, noteId)
+        val first = postFinish("alice", "acme-health", encounterId)
+        assertThat(first.statusCode).isEqualTo(HttpStatus.OK)
+        assertThat(auditRows("clinical.encounter.finished")).hasSize(1)
+
+        val second = postFinish("alice", "acme-health", encounterId)
+        assertThat(second.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = second.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_already_closed")
+        assertThat(auditRows("clinical.encounter.finished")).hasSize(1)
+    }
+
+    @Test
+    fun `finish on CANCELLED encounter — 409 encounter_already_closed`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        postCancel("alice", "acme-health", encounterId, "NO_SHOW")
+
+        val resp = postFinish("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = resp.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_already_closed")
+    }
+
+    @Test
+    fun `unknown encounterId — 404, no audit`() {
         val (_, _) = seedEncounter("alice", role = "OWNER")
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val resp = post(
-            "alice",
-            "acme-health",
-            UUID.randomUUID(),
-            """{"body":"note"}""",
-        )
+        val resp = postFinish("alice", "acme-health", UUID.randomUUID())
         assertThat(resp.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
-        assertThat(
-            jdbc.queryForObject(
-                "SELECT COUNT(*) FROM clinical.encounter_note",
-                Long::class.java,
-            ),
-        ).isEqualTo(0)
-        assertThat(auditRows("clinical.encounter.note.created")).isEmpty()
+        assertThat(auditRows("clinical.encounter.finished")).isEmpty()
     }
 
     @Test
-    fun `cross-tenant encounterId — 404 (no existence leak)`() {
+    fun `cross-tenant encounterId — 404, no leak`() {
         val alice = provisionUser("alice")
         val tenantA = seedTenant("tenant-a")
         val tenantB = seedTenant("tenant-b")
         seedMembership(tenantA, alice, role = "OWNER")
         seedMembership(tenantB, alice, role = "OWNER")
         val patientInA = createPatient("alice", "tenant-a")
-        val encounterInA = createEncounter("alice", "tenant-a", patientInA)
+        val encounterInA = createEncounterHttp("alice", "tenant-a", patientInA)
+        jdbc.update("DELETE FROM audit.audit_event")
 
-        val resp = post("alice", "tenant-b", encounterInA, """{"body":"probe"}""")
+        val resp = postFinish("alice", "tenant-b", encounterInA)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
+        assertThat(auditRows("clinical.encounter.finished")).isEmpty()
     }
 
     @Test
-    fun `audit reason does NOT contain the note body (PHI discipline)`() {
+    fun `DB trigger refuses direct UPDATE on FINISHED row`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        jdbc.update("DELETE FROM audit.audit_event")
+        val noteId = createNote("alice", "acme-health", encounterId, "n")
+        signNote("alice", "acme-health", encounterId, noteId)
+        assertThat(postFinish("alice", "acme-health", encounterId).statusCode)
+            .isEqualTo(HttpStatus.OK)
 
-        val distinctive = "Distinct-Phrase-${UUID.randomUUID()}"
-        val resp = post("alice", "acme-health", encounterId, """{"body":"$distinctive"}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.CREATED)
-
-        val row = auditRows("clinical.encounter.note.created").single()
-        assertThat(row["reason"] as String).doesNotContain(distinctive)
-    }
-
-    @Test
-    fun `note create on FINISHED encounter — 409 encounter_closed (Phase 4C-5)`() {
-        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        val noteId = createNoteForSetup("alice", encounterId, "n")
-        signNoteForSetup("alice", encounterId, noteId)
-        finishEncounterForSetup("alice", encounterId)
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        val resp = post("alice", "acme-health", encounterId, """{"body":"late entry"}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
-        @Suppress("UNCHECKED_CAST")
-        val details = resp.body!!["details"] as Map<String, Any?>
-        assertThat(details["reason"]).isEqualTo("encounter_closed")
-        assertThat(auditRows("clinical.encounter.note.created")).isEmpty()
-    }
-
-    @Test
-    fun `note create on CANCELLED encounter — 409 encounter_closed (Phase 4C-5)`() {
-        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        cancelEncounterForSetup("alice", encounterId, "NO_SHOW")
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        val resp = post("alice", "acme-health", encounterId, """{"body":"late entry"}""")
-        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
-        @Suppress("UNCHECKED_CAST")
-        val details = resp.body!!["details"] as Map<String, Any?>
-        assertThat(details["reason"]).isEqualTo("encounter_closed")
-        assertThat(auditRows("clinical.encounter.note.created")).isEmpty()
+        // Direct UPDATE via admin DS bypasses the WriteGate. The
+        // V21 trigger refuses any UPDATE on a closed encounter.
+        val thrown = catchThrowable {
+            jdbc.update(
+                "UPDATE clinical.encounter SET updated_at = now() WHERE id = ?",
+                encounterId,
+            )
+        }
+        assertThat(thrown)
+            .isNotNull
+            .hasMessageContaining("immutable once closed")
     }
 
     // ---- helpers ----
@@ -257,7 +249,7 @@ class CreateEncounterNoteIntegrationTest {
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, user, role = role)
         val patientId = createPatient(subject, "acme-health")
-        val encounterId = createEncounter(subject, "acme-health", patientId)
+        val encounterId = createEncounterHttp(subject, "acme-health", patientId)
         return user to encounterId
     }
 
@@ -279,7 +271,7 @@ class CreateEncounterNoteIntegrationTest {
         return UUID.fromString(data["id"] as String)
     }
 
-    private fun createEncounter(subject: String, slug: String, patientId: UUID): UUID {
+    private fun createEncounterHttp(subject: String, slug: String, patientId: UUID): UUID {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
@@ -294,83 +286,76 @@ class CreateEncounterNoteIntegrationTest {
         return UUID.fromString(data["id"] as String)
     }
 
-    @Suppress("UNCHECKED_CAST")
-    private fun post(
+    private fun createNote(
         subject: String,
         slug: String,
         encounterId: UUID,
         body: String,
-    ): ResponseEntity<Map<String, Any>> {
+    ): UUID {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
-        return rest.exchange(
+        val resp = rest.exchange(
             "/api/v1/tenants/$slug/encounters/$encounterId/notes",
             HttpMethod.POST,
-            HttpEntity(body, headers),
+            HttpEntity("""{"body":"$body"}""", headers),
             Map::class.java,
-        ) as ResponseEntity<Map<String, Any>>
-    }
-
-    // Setup-only helpers used by the 4C.5 closed-encounter tests —
-    // each wraps the corresponding HTTP endpoint and returns nothing
-    // (or the minimum needed).
-    private fun createNoteForSetup(
-        subject: String,
-        encounterId: UUID,
-        body: String,
-    ): UUID {
-        val resp = post("alice", "acme-health", encounterId, """{"body":"$body"}""")
+        )
         @Suppress("UNCHECKED_CAST")
         val data = resp.body!!["data"] as Map<String, Any>
         return UUID.fromString(data["id"] as String)
     }
 
-    private fun signNoteForSetup(
+    private fun signNote(
         subject: String,
+        slug: String,
         encounterId: UUID,
         noteId: UUID,
     ) {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
-            add("X-Medcore-Tenant", "acme-health")
+            add("X-Medcore-Tenant", slug)
         }
         rest.exchange(
-            "/api/v1/tenants/acme-health/encounters/$encounterId/notes/$noteId/sign",
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes/$noteId/sign",
             HttpMethod.POST,
             HttpEntity<Void>(headers),
             Map::class.java,
         )
     }
 
-    private fun finishEncounterForSetup(
+    @Suppress("UNCHECKED_CAST")
+    private fun postFinish(
         subject: String,
+        slug: String,
         encounterId: UUID,
-    ) {
+    ): ResponseEntity<Map<String, Any>> {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
-            add("X-Medcore-Tenant", "acme-health")
+            add("X-Medcore-Tenant", slug)
         }
-        rest.exchange(
-            "/api/v1/tenants/acme-health/encounters/$encounterId/finish",
+        return rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/finish",
             HttpMethod.POST,
             HttpEntity<Void>(headers),
             Map::class.java,
-        )
+        ) as ResponseEntity<Map<String, Any>>
     }
 
-    private fun cancelEncounterForSetup(
+    @Suppress("UNCHECKED_CAST")
+    private fun postCancel(
         subject: String,
+        slug: String,
         encounterId: UUID,
         reason: String,
-    ) {
+    ): ResponseEntity<Map<String, Any>> {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
-            add("X-Medcore-Tenant", "acme-health")
+            add("X-Medcore-Tenant", slug)
         }
-        rest.exchange(
-            "/api/v1/tenants/acme-health/encounters/$encounterId/cancel",
+        return rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/cancel",
             HttpMethod.POST,
             HttpEntity("""{"cancelReason":"$reason"}""", headers),
             Map::class.java,
-        )
+        ) as ResponseEntity<Map<String, Any>>
     }
 
     private fun provisionUser(subject: String): UUID {
@@ -456,12 +441,4 @@ class CreateEncounterNoteIntegrationTest {
     private fun bearerOnly(token: String) = HttpHeaders().apply {
         add(HttpHeaders.AUTHORIZATION, "Bearer $token")
     }
-
-    /**
-     * Conservative JSON string literal that escapes only the
-     * characters actually present in our test inputs. Tests use
-     * simple Latin strings — no need to depend on a JSON library.
-     */
-    private fun jsonString(s: String): String =
-        "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }

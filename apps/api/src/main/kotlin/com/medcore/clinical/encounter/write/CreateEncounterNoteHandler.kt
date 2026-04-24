@@ -1,8 +1,10 @@
 package com.medcore.clinical.encounter.write
 
+import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.persistence.EncounterNoteEntity
 import com.medcore.clinical.encounter.persistence.EncounterNoteRepository
 import com.medcore.clinical.encounter.persistence.EncounterRepository
+import com.medcore.platform.write.WriteConflictException
 import com.medcore.platform.write.WriteContext
 import com.medcore.tenancy.persistence.TenantRepository
 import jakarta.persistence.EntityNotFoundException
@@ -60,6 +62,14 @@ class CreateEncounterNoteHandler(
             ?: throw EntityNotFoundException("encounter not found: ${command.encounterId}")
         if (encounter.tenantId != tenant.id) {
             throw EntityNotFoundException("encounter not found: ${command.encounterId}")
+        }
+
+        // Phase 4C.5: notes cannot be added to a closed encounter.
+        // Closed (FINISHED / CANCELLED) encounters are part of the
+        // legal medical record and are immutable. Any retroactive
+        // documentation needs the future amendment workflow.
+        if (encounter.status != EncounterStatus.IN_PROGRESS) {
+            throw WriteConflictException("encounter_closed")
         }
 
         val now = Instant.now(clock)

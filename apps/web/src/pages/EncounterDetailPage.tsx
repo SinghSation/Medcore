@@ -11,7 +11,12 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { ApiError } from '@/lib/api-client'
-import { getEncounter } from '@/lib/encounters'
+import {
+  cancelEncounter,
+  finishEncounter,
+  getEncounter,
+  type CancelReason,
+} from '@/lib/encounters'
 import {
   createEncounterNote,
   listEncounterNotes,
@@ -19,6 +24,13 @@ import {
   type EncounterNote,
 } from '@/lib/notes'
 import { useAuth } from '@/providers/AuthProvider'
+
+const CANCEL_REASONS: ReadonlyArray<{ value: CancelReason; label: string }> = [
+  { value: 'NO_SHOW', label: 'No-show' },
+  { value: 'PATIENT_DECLINED', label: 'Patient declined' },
+  { value: 'SCHEDULING_ERROR', label: 'Scheduling error' },
+  { value: 'OTHER', label: 'Other' },
+]
 
 /**
  * Minimal encounter detail surface (Phase 4C.1, VS1 Chunk D).
@@ -150,6 +162,93 @@ export function EncounterDetailPage(): React.JSX.Element {
     signMutation.mutate(noteId)
   }
 
+  // --- Encounter lifecycle: finish + cancel (Phase 4C.5) ---
+
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null)
+  const [cancelPickerOpen, setCancelPickerOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState<CancelReason>('NO_SHOW')
+
+  const finishMutation = useMutation({
+    mutationFn: () =>
+      finishEncounter({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+      }),
+    onSuccess: () => {
+      setLifecycleError(null)
+      queryClient.invalidateQueries({
+        queryKey: ['encounter', slug, encounterId],
+      })
+      queryClient.invalidateQueries({
+        queryKey: ['notes', slug, encounterId],
+      })
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 403) {
+        setLifecycleError(
+          'You do not have authority to finish encounters on this tenant.',
+        )
+      } else if (err instanceof ApiError && err.status === 409) {
+        const reason = extractConflictReason(err)
+        setLifecycleError(
+          reason === 'encounter_has_no_signed_notes'
+            ? 'Finish requires at least one signed note on the encounter.'
+            : 'This encounter is already closed.',
+        )
+        queryClient.invalidateQueries({
+          queryKey: ['encounter', slug, encounterId],
+        })
+      } else {
+        setLifecycleError('Could not finish encounter. Try again.')
+      }
+    },
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: (reason: CancelReason) =>
+      cancelEncounter({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+        cancelReason: reason,
+      }),
+    onSuccess: () => {
+      setLifecycleError(null)
+      setCancelPickerOpen(false)
+      queryClient.invalidateQueries({
+        queryKey: ['encounter', slug, encounterId],
+      })
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 403) {
+        setLifecycleError(
+          'You do not have authority to cancel encounters on this tenant.',
+        )
+      } else if (err instanceof ApiError && err.status === 409) {
+        setLifecycleError('This encounter is already closed.')
+        queryClient.invalidateQueries({
+          queryKey: ['encounter', slug, encounterId],
+        })
+      } else {
+        setLifecycleError('Could not cancel encounter. Try again.')
+      }
+    },
+  })
+
+  function onFinishEncounter(): void {
+    setLifecycleError(null)
+    finishMutation.mutate()
+  }
+
+  function onConfirmCancel(): void {
+    setLifecycleError(null)
+    cancelMutation.mutate(cancelReason)
+  }
+
+  const signedCount =
+    notesQuery.data?.items.filter((n) => (n.status ?? 'DRAFT') === 'SIGNED')
+      .length ?? 0
+  const canFinish = signedCount > 0 && !finishMutation.isPending
+
   const notFound = query.isError && isNotFound(query.error)
   const encounter = query.data
 
@@ -233,6 +332,25 @@ export function EncounterDetailPage(): React.JSX.Element {
                 <dt className="text-muted-foreground">Finished</dt>
                 <dd className="font-mono">{encounter.finishedAt ?? '—'}</dd>
 
+                {encounter.status === 'CANCELLED' && (
+                  <>
+                    <dt className="text-muted-foreground">Cancelled</dt>
+                    <dd
+                      className="font-mono"
+                      data-testid="encounter-cancelled-at"
+                    >
+                      {encounter.cancelledAt ?? '—'}
+                    </dd>
+                    <dt className="text-muted-foreground">Cancel reason</dt>
+                    <dd
+                      className="font-mono"
+                      data-testid="encounter-cancel-reason"
+                    >
+                      {encounter.cancelReason ?? '—'}
+                    </dd>
+                  </>
+                )}
+
                 <dt className="text-muted-foreground">Patient</dt>
                 <dd>
                   <Link
@@ -244,6 +362,100 @@ export function EncounterDetailPage(): React.JSX.Element {
                   </Link>
                 </dd>
               </dl>
+
+              {/* Lifecycle actions (Phase 4C.5) — visible only while
+                  the encounter is IN_PROGRESS. */}
+              {encounter.status === 'IN_PROGRESS' && (
+                <div
+                  className="mt-4 flex flex-col gap-2"
+                  data-testid="encounter-lifecycle-actions"
+                >
+                  <div className="flex gap-2">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={onFinishEncounter}
+                      disabled={!canFinish}
+                      data-testid="finish-encounter-button"
+                    >
+                      {finishMutation.isPending ? 'Finishing…' : 'Finish encounter'}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setCancelPickerOpen((v) => !v)}
+                      data-testid="cancel-encounter-button"
+                    >
+                      Cancel encounter
+                    </Button>
+                  </div>
+                  {!canFinish && signedCount === 0 && (
+                    <p
+                      className="text-muted-foreground text-xs"
+                      data-testid="finish-encounter-helper"
+                    >
+                      Finish requires at least one signed note.
+                    </p>
+                  )}
+                  {cancelPickerOpen && (
+                    <div
+                      className="flex flex-col gap-2 rounded-md border p-3"
+                      data-testid="cancel-encounter-picker"
+                    >
+                      <label
+                        htmlFor="cancel-reason"
+                        className="text-muted-foreground text-xs font-medium uppercase tracking-wide"
+                      >
+                        Cancel reason
+                      </label>
+                      <select
+                        id="cancel-reason"
+                        value={cancelReason}
+                        onChange={(e) =>
+                          setCancelReason(e.target.value as CancelReason)
+                        }
+                        data-testid="cancel-reason-select"
+                        className="border-input w-full rounded-md border bg-transparent px-3 py-2 text-sm"
+                      >
+                        {CANCEL_REASONS.map((r) => (
+                          <option key={r.value} value={r.value}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCancelPickerOpen(false)}
+                        >
+                          Dismiss
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={onConfirmCancel}
+                          disabled={cancelMutation.isPending}
+                          data-testid="confirm-cancel-button"
+                        >
+                          {cancelMutation.isPending
+                            ? 'Cancelling…'
+                            : 'Confirm cancel'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {lifecycleError !== null && (
+                    <p
+                      role="alert"
+                      className="text-destructive text-xs"
+                      data-testid="encounter-lifecycle-error"
+                    >
+                      {lifecycleError}
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -253,49 +465,55 @@ export function EncounterDetailPage(): React.JSX.Element {
             <CardHeader>
               <CardTitle>Notes</CardTitle>
               <CardDescription>
-                Append-only. Each save creates a new note.
+                {encounter.status === 'IN_PROGRESS'
+                  ? 'Append-only. Each save creates a new note.'
+                  : 'This encounter is closed. Notes are read-only.'}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <label
-                  htmlFor="note-body"
-                  className="text-muted-foreground text-xs font-medium uppercase tracking-wide"
-                >
-                  New note
-                </label>
-                <textarea
-                  id="note-body"
-                  data-testid="note-body-textarea"
-                  value={noteDraft}
-                  onChange={(e) => setNoteDraft(e.target.value)}
-                  disabled={saveMutation.isPending}
-                  rows={4}
-                  maxLength={20000}
-                  placeholder="Write a clinical note…"
-                  className="border-input focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                {saveError !== null && (
-                  <p
-                    role="alert"
-                    className="text-destructive text-xs"
-                    data-testid="save-note-error"
-                  >
-                    {saveError}
-                  </p>
-                )}
-                <div className="flex justify-end">
-                  <Button
-                    onClick={onSaveNote}
-                    disabled={!canSave}
-                    data-testid="save-note-button"
-                  >
-                    {saveMutation.isPending ? 'Saving…' : 'Save note'}
-                  </Button>
-                </div>
-              </div>
+              {encounter.status === 'IN_PROGRESS' && (
+                <>
+                  <div className="flex flex-col gap-2">
+                    <label
+                      htmlFor="note-body"
+                      className="text-muted-foreground text-xs font-medium uppercase tracking-wide"
+                    >
+                      New note
+                    </label>
+                    <textarea
+                      id="note-body"
+                      data-testid="note-body-textarea"
+                      value={noteDraft}
+                      onChange={(e) => setNoteDraft(e.target.value)}
+                      disabled={saveMutation.isPending}
+                      rows={4}
+                      maxLength={20000}
+                      placeholder="Write a clinical note…"
+                      className="border-input focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    {saveError !== null && (
+                      <p
+                        role="alert"
+                        className="text-destructive text-xs"
+                        data-testid="save-note-error"
+                      >
+                        {saveError}
+                      </p>
+                    )}
+                    <div className="flex justify-end">
+                      <Button
+                        onClick={onSaveNote}
+                        disabled={!canSave}
+                        data-testid="save-note-button"
+                      >
+                        {saveMutation.isPending ? 'Saving…' : 'Save note'}
+                      </Button>
+                    </div>
+                  </div>
 
-              <hr className="border-border" />
+                  <hr className="border-border" />
+                </>
+              )}
 
               <div className="flex flex-col gap-3">
                 {notesQuery.isLoading && (
@@ -334,6 +552,7 @@ export function EncounterDetailPage(): React.JSX.Element {
                         note={n}
                         onSign={onSignNote}
                         pendingSignNoteId={signingNoteId}
+                        canSign={encounter.status === 'IN_PROGRESS'}
                       />
                     ))}
                   </ul>
@@ -351,14 +570,17 @@ function NoteRow({
   note,
   onSign,
   pendingSignNoteId,
+  canSign,
 }: {
   note: EncounterNote
   onSign: (noteId: string) => void
   pendingSignNoteId: string | null
+  canSign: boolean
 }): React.JSX.Element {
   const status = note.status ?? 'DRAFT'
   const isSigned = status === 'SIGNED'
   const isPending = pendingSignNoteId === note.id
+  const showSignButton = !isSigned && canSign
   return (
     <li
       className={
@@ -386,7 +608,7 @@ function NoteRow({
             <span className="font-mono">{note.createdBy}</span>
           </span>
         </div>
-        {!isSigned && (
+        {showSignButton && (
           <Button
             size="sm"
             variant="outline"
@@ -414,4 +636,18 @@ function NoteRow({
 
 function isNotFound(err: unknown): err is ApiError {
   return err instanceof ApiError && err.status === 404
+}
+
+/**
+ * Pull `details.reason` out of a 409 `resource.conflict` body.
+ * Returns `null` when the body doesn't carry one (unexpected
+ * shape). Used by the finish/cancel mutations to distinguish
+ * `encounter_has_no_signed_notes` from `encounter_already_closed`.
+ */
+function extractConflictReason(err: ApiError): string | null {
+  if (typeof err.body !== 'object' || err.body === null) return null
+  const details = (err.body as { details?: unknown }).details
+  if (typeof details !== 'object' || details === null) return null
+  const reason = (details as { reason?: unknown }).reason
+  return typeof reason === 'string' ? reason : null
 }

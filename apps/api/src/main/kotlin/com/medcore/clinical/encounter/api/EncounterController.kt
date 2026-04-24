@@ -8,10 +8,14 @@ import com.medcore.clinical.encounter.read.ListEncounterNotesResult
 import com.medcore.clinical.encounter.read.ListPatientEncountersCommand
 import com.medcore.clinical.encounter.read.ListPatientEncountersHandler
 import com.medcore.clinical.encounter.read.ListPatientEncountersResult
+import com.medcore.clinical.encounter.write.CancelEncounterCommand
+import com.medcore.clinical.encounter.write.CancelEncounterHandler
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.CreateEncounterNoteHandler
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
+import com.medcore.clinical.encounter.write.FinishEncounterCommand
+import com.medcore.clinical.encounter.write.FinishEncounterHandler
 import com.medcore.clinical.encounter.write.SignEncounterNoteCommand
 import com.medcore.clinical.encounter.write.SignEncounterNoteHandler
 import com.medcore.clinical.encounter.write.StartEncounterCommand
@@ -90,6 +94,13 @@ class EncounterController(
     private val signEncounterNoteGate:
         WriteGate<SignEncounterNoteCommand, EncounterNoteSnapshot>,
     private val signEncounterNoteHandler: SignEncounterNoteHandler,
+    // --- 4C.5 encounter finish + cancel ---
+    private val finishEncounterGate:
+        WriteGate<FinishEncounterCommand, EncounterSnapshot>,
+    private val finishEncounterHandler: FinishEncounterHandler,
+    private val cancelEncounterGate:
+        WriteGate<CancelEncounterCommand, EncounterSnapshot>,
+    private val cancelEncounterHandler: CancelEncounterHandler,
 ) {
 
     /**
@@ -244,6 +255,86 @@ class EncounterController(
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
         return ResponseEntity.ok(responseBody)
+    }
+
+    // ========================================================================
+    // Phase 4C.5 — encounter finish + cancel
+    // ========================================================================
+
+    /**
+     * Finish an encounter (Phase 4C.5). Transitions
+     * `IN_PROGRESS → FINISHED`. Requires at least one SIGNED
+     * note on the encounter (the invariant the whole 4D.5 →
+     * 4C.5 sequencing was built for). Emits
+     * `CLINICAL_ENCOUNTER_FINISHED` on 200. Requires
+     * `ENCOUNTER_WRITE` (OWNER + ADMIN).
+     *
+     * 409 paths:
+     *   - `encounter_already_closed` — double-finish or
+     *     finishing a CANCELLED encounter.
+     *   - `encounter_has_no_signed_notes` — precondition unmet.
+     */
+    @PostMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/finish",
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun finishEncounter(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<ApiResponse<EncounterResponse>> {
+        val command = FinishEncounterCommand(slug = slug, encounterId = encounterId)
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = finishEncounterGate.apply(command, context) { cmd ->
+            finishEncounterHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok()
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
+    }
+
+    /**
+     * Cancel an encounter (Phase 4C.5). Transitions
+     * `IN_PROGRESS → CANCELLED` with a closed-enum reason code.
+     * Emits `CLINICAL_ENCOUNTER_CANCELLED` on 200. Requires
+     * `ENCOUNTER_WRITE`.
+     *
+     * Body: `{cancelReason: "NO_SHOW" | "PATIENT_DECLINED" |
+     * "SCHEDULING_ERROR" | "OTHER"}`. Missing / unknown
+     * `cancelReason` → 422 `request.validation_failed`.
+     *
+     * 409 `encounter_already_closed` when cancelling a
+     * FINISHED or CANCELLED encounter.
+     */
+    @PostMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/cancel",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun cancelEncounter(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+        @Valid @RequestBody body: CancelEncounterRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<ApiResponse<EncounterResponse>> {
+        val command = body.toCommand(slug, encounterId)
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = cancelEncounterGate.apply(command, context) { cmd ->
+            cancelEncounterHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok()
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
     }
 
     // ========================================================================

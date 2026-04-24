@@ -1,6 +1,7 @@
 package com.medcore.clinical.encounter.write
 
 import com.medcore.clinical.encounter.model.EncounterNoteStatus
+import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.persistence.EncounterNoteEntity
 import com.medcore.clinical.encounter.persistence.EncounterNoteRepository
 import com.medcore.clinical.encounter.persistence.EncounterRepository
@@ -94,6 +95,13 @@ class SignEncounterNoteHandler(
             throw EntityNotFoundException(
                 "encounter not found: ${command.encounterId}",
             )
+        }
+
+        // Phase 4C.5: drafts on a closed encounter cannot be
+        // signed. Signing happens during IN_PROGRESS; after
+        // FINISH / CANCEL the encounter is immutable.
+        if (encounter.status != EncounterStatus.IN_PROGRESS) {
+            throw WriteConflictException("encounter_closed")
         }
 
         val note = encounterNoteRepository.findById(command.noteId).orElse(null)
