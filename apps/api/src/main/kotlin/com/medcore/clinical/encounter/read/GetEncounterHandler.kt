@@ -46,24 +46,6 @@ class GetEncounterHandler(
             throw EntityNotFoundException("encounter not found: ${command.encounterId}")
         }
 
-        return toSnapshot(encounter)
+        return EncounterSnapshot.from(encounter)
     }
-
-    private fun toSnapshot(entity: EncounterEntity): EncounterSnapshot =
-        EncounterSnapshot(
-            id = entity.id,
-            tenantId = entity.tenantId,
-            patientId = entity.patientId,
-            status = entity.status,
-            encounterClass = entity.encounterClass,
-            startedAt = entity.startedAt,
-            finishedAt = entity.finishedAt,
-            cancelledAt = entity.cancelledAt,
-            cancelReason = entity.cancelReason,
-            createdAt = entity.createdAt,
-            updatedAt = entity.updatedAt,
-            createdBy = entity.createdBy,
-            updatedBy = entity.updatedBy,
-            rowVersion = entity.rowVersion,
-        )
 }

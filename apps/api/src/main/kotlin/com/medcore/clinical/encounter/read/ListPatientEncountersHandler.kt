@@ -57,24 +57,8 @@ class ListPatientEncountersHandler(
             tenantId = tenant.id,
             patientId = patient.id,
         )
-        return ListPatientEncountersResult(items = encounters.map { toSnapshot(it) })
-    }
-
-    private fun toSnapshot(entity: EncounterEntity): EncounterSnapshot =
-        EncounterSnapshot(
-            id = entity.id,
-            tenantId = entity.tenantId,
-            patientId = entity.patientId,
-            status = entity.status,
-            encounterClass = entity.encounterClass,
-            startedAt = entity.startedAt,
-            finishedAt = entity.finishedAt,
-            cancelledAt = entity.cancelledAt,
-            cancelReason = entity.cancelReason,
-            createdAt = entity.createdAt,
-            updatedAt = entity.updatedAt,
-            createdBy = entity.createdBy,
-            updatedBy = entity.updatedBy,
-            rowVersion = entity.rowVersion,
+        return ListPatientEncountersResult(
+            items = encounters.map { EncounterSnapshot.from(it) },
         )
+    }
 }
