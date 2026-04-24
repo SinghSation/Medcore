@@ -10,6 +10,7 @@ import com.medcore.tenancy.persistence.TenantRepository
 import jakarta.persistence.EntityNotFoundException
 import java.time.Clock
 import java.time.Instant
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Component
 
 /**
@@ -41,6 +42,25 @@ import org.springframework.stereotype.Component
  *    convention. `saveAndFlush` so `row_version` + enforced
  *    fields land before the auditor runs.
  * 6. Return [EncounterNoteSnapshot] reflecting the signed state.
+ *
+ * ### Concurrent sign race
+ *
+ * Two simultaneous sign requests on the same DRAFT note can both
+ * pass the `status == SIGNED` check — check-then-update is not
+ * atomic without row-level locking. The losing transaction then
+ * fails at `saveAndFlush` because JPA's `@Version` optimistic
+ * lock refuses to update a row whose `row_version` has already
+ * advanced. Without translation, that surfaces as
+ * [OptimisticLockingFailureException] →
+ * [com.medcore.platform.api.GlobalExceptionHandler]'s generic
+ * 409 `resource.conflict`. Concurrent re-signs would then emit
+ * a different error body than the documented sequential re-sign
+ * (`details.reason: note_already_signed`).
+ *
+ * Fix: catch the optimistic-lock exception around `saveAndFlush`
+ * and re-throw as [WriteConflictException] with the same
+ * `note_already_signed` code. Sequential and concurrent
+ * re-signs now surface identically to the caller.
  *
  * ### DB-layer defense-in-depth
  *
@@ -92,7 +112,16 @@ class SignEncounterNoteHandler(
         note.signedBy = context.principal.userId
         note.updatedAt = now
         note.updatedBy = context.principal.userId
-        val saved = encounterNoteRepository.saveAndFlush(note)
+        val saved = try {
+            encounterNoteRepository.saveAndFlush(note)
+        } catch (ex: OptimisticLockingFailureException) {
+            // A concurrent signer won the race: the row_version on
+            // disk has advanced past what this tx loaded, so the
+            // note is already SIGNED. Translate to the same
+            // WriteConflictException the sequential path throws so
+            // callers see a consistent 409 + reason.
+            throw WriteConflictException("note_already_signed", ex)
+        }
         return toSnapshot(saved)
     }
 
