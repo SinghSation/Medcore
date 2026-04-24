@@ -1,6 +1,6 @@
 ---
 status: Active
-last_reviewed: 2026-04-23
+last_reviewed: 2026-04-24
 next_review: 2026-05-25
 cadence: stable-amended-on-phase-close
 owner: Repository owner
@@ -8,6 +8,13 @@ changelog:
   - 2026-04-22 — Phase 3J DoD populated alongside its first slice
     (3J.1 — WriteGate substrate). Per-sub-slice entries will land
     as each 3J.N slice opens.
+  - 2026-04-24 — VS1 wrap. §3.8.7 (Phase 4A.x+) extended with
+    list-endpoint + detail-render exercise notes. NEW §3.9
+    (Phase 4B, NOT YET OPENED, naming-drift callout). NEW §3.10
+    (Phase 4C, VS1-landed 4C.1 + 4C.2, ≤ 3-click DoD met). NEW
+    §3.11 (Phase 4D, VS1-landed 4D.1..4D.4, ≤ 90 s DoD met +
+    CI-enforced). Former §3.9 renumbered to §3.12, scope
+    narrowed from "4B–" to "4E–".
 ---
 
 # Medcore — Definition of Done
@@ -2006,19 +2013,257 @@ in the 4A.5 commit body.
   - CF-4A5-5: FHIR search endpoint.
   - CF-4A5-6: FHIR Bundle / CapabilityStatement / SMART.
 
-#### 3.8.7 Phase 4A.x+ — Address/contact history, encounter, notes, workflow-benchmark, merge
+#### 3.8.7 Phase 4A.x+ — Address/contact history, list surface, workflow-benchmark, merge
 
-<!-- TODO(content): populated as each 4A sub-slice opens.
-     NOTE: After 4A.5, the next slice is a VERTICAL SLICE
-     (frontend + first clinical workflow), NOT another
-     backend slice. No new backend-only phase starts until
-     the vertical-slice plan is approved.
+VS1 (2026-04-23..24) exercised Phase 4A's read surface without
+opening new per-patient sub-slices. Specifically:
 
+- [x] **Patient list endpoint** (`GET /api/v1/tenants/{slug}/patients`)
+      + `CLINICAL_PATIENT_LIST_ACCESSED` audit at commit `5ce4e7d`.
+      The commit labeled itself `Roadmap-Phase: 4B.1` — that is a
+      forward-only naming drift. The endpoint functionally
+      belongs to Phase 4A (patient-registry read surface), not
+      Phase 4B (Scheduling). Rule 07 (forward-only naming) keeps
+      the trailer as-is; this DoD block notes the drift for the
+      record.
+- [x] **Patient detail render surface** exercised by VS1 Chunks
+      C + D + E + F — `data-phi` container-level PHI boundary
+      convention established at Chunk C (`28a6817`) and extended
+      through encounter + note surfaces.
+- [x] **Workflow-benchmark instrumentation (4A.6 equivalent).**
+      VS1 Chunk F (`1dc34ef`) ships
+      `apps/web/e2e/vs1-happy-path.spec.ts` which times the full
+      clinician loop from landing to note-saved. The 4A-scoped
+      portion (login → patient list → patient detail) is
+      implicitly measured as part of the end-to-end wall-clock.
+      A dedicated Phase 4A-only benchmark is not introduced in
+      VS1, as the broader VS1 workflow benchmark already captures
+      the relevant read-path performance. This may be revisited
+      if Phase 4A evolves independently of the VS1 workflow.
+
+Still pending for Phase 4A full close:
+
+<!-- TODO(content): populated when each sub-slice opens.
      - 4A.3.1: Address + contact append-only history tables
-     - 4A.6: Workflow-benchmark instrumentation (depends on 3L)
      - 4A.N: Merge workflow (dedicated slice) -->
 
-### 3.9 Phases 4B–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
+### 3.9 Phase 4B — Scheduling *(NOT YET OPENED)*
+
+Phase 4B per the roadmap covers appointments, providers,
+locations, and the appointment lifecycle. **No scheduling code
+has shipped.** The commit `5ce4e7d` ("list patients endpoint")
+tagged itself `Roadmap-Phase: 4B.1` — that was a naming drift;
+the work is Phase 4A expansion (see §3.8.7). Rule 07
+(forward-only naming) keeps the commit trailer as-is.
+
+DoD populates when the first real Phase 4B slice opens —
+defined as the first commit that introduces a `scheduling`
+module with at least an `Appointment` entity.
+
+<!-- TODO(content): populated when Phase 4B opens. -->
+
+### 3.10 Phase 4C — Encounter shell
+
+Phase 4C opened via VS1 Chunks D (backend + frontend). VS1 landed
+encounter creation + read; the state machine, attribution,
+linkage, and FHIR surfaces are Phase 4C follow-on slices.
+
+#### 3.10.1 Phase 4C.1 — Encounter write + read backend *(landed `75e6ac2`)*
+
+- [x] `V18__clinical_encounter.sql` lands: `clinical.encounter`
+      table with PK, FK to `tenancy.tenant` + `clinical.patient`,
+      denormalized `tenant_id` for RLS, `status` (IN_PROGRESS
+      only in 4C.1), `encounter_class` enum, `started_at`,
+      `finished_at` nullable, audit columns, `row_version`.
+- [x] Strictly additive + reversible migration; all constraints
+      named; CHECK + FK + NOT NULL per pattern v1.3.
+- [x] RLS: both-GUCs select policy + OWNER/ADMIN
+      insert/update/delete policies. `p_encounter_select`,
+      `p_encounter_insert`, `p_encounter_update`,
+      `p_encounter_delete` all in place.
+- [x] Write stack: `StartEncounter{Command, Validator, Policy,
+      Handler, Auditor}` + `GetEncounter{Command, Handler,
+      Policy, Auditor}` under `clinical/encounter/`. Both use
+      `PhiRlsTxHook`.
+- [x] `WriteGate` + `ReadGate` beans wired in
+      `EncounterWriteConfig` (`startEncounterGate`,
+      `getEncounterGate`).
+- [x] `MedcoreAuthority.{ENCOUNTER_READ, ENCOUNTER_WRITE}` added.
+      Role map: `OWNER` + `ADMIN` get both; `MEMBER` gets
+      `ENCOUNTER_READ` only. Asserted by
+      `MembershipRoleAuthoritiesTest`.
+- [x] `AuditAction.{CLINICAL_ENCOUNTER_STARTED,
+      CLINICAL_ENCOUNTER_ACCESSED}` added; closed-enum reason
+      slugs `intent:clinical.encounter.start|class:<CLASS>`
+      and `intent:clinical.encounter.access`. **No PHI in
+      reason.**
+- [x] 404 identity discipline: unknown encounter + cross-tenant
+      encounter both return 404; no existence leak.
+- [x] Tests: `StartEncounterIntegrationTest`,
+      `GetEncounterIntegrationTest`,
+      `EncounterLogPhiLeakageTest` (body never in stdout or
+      audit rows). Full `./gradlew test` green.
+
+#### 3.10.2 Phase 4C.2 — Start-encounter button + encounter detail page *(landed `b1ff0c3`)*
+
+- [x] `apps/web/src/lib/encounters.ts` — typed
+      `startEncounter()` + `getEncounter()` + `Encounter` /
+      `EncounterStatus` / `EncounterClass` types.
+- [x] `apps/web/src/pages/EncounterDetailPage.tsx` — minimal
+      card showing status, class, started/finished timestamps,
+      patient back-link. `data-phi` tag on card root.
+- [x] "Start encounter" button on `PatientDetailPage.tsx` wired
+      through TanStack Query mutation. Navigates to the new
+      encounter detail page on 201.
+- [x] 404 / 500 handlers present (render "not accessible" and
+      "could not load encounter" states respectively).
+- [x] Vitest specs: `encounters.test.ts` (API client) + 4 cases
+      on `EncounterDetailPage.test.tsx`.
+- [x] `pnpm typecheck`, `pnpm test`, `pnpm build` green.
+
+#### 3.10.3 Workflow-benchmark
+
+- [x] **≤ 3-click DoD (Phase 4C exit)** asserted by VS1 Chunk F
+      Playwright spec (`apps/web/e2e/vs1-happy-path.spec.ts`).
+      Measured 3 / 3 clicks across 5 consecutive runs. Evidence:
+      `docs/evidence/vs1-dod-measurement.md`. CI-enforced via
+      the `e2e` job (see `docs/runbooks/ci-cd.md` §1).
+- [x] The DoD is measured from the clinician-landing surface
+      (`HomePage` at `/`) rather than a dedicated "today's
+      schedule" view — the schedule view is a Phase 4B entity
+      and has not been built. The measurement is faithful to
+      the shortest clinician path currently available; it will
+      re-anchor when the schedule view lands.
+
+#### 3.10.4 Still required for Phase 4C full exit
+
+<!-- TODO(content): populated as each Phase 4C follow-on opens.
+     - State machine transitions (IN_PROGRESS → FINISHED,
+       IN_PROGRESS → CANCELLED, any → entered-in-error)
+     - State-transition audit actions + reason slugs
+     - Provider attribution: primary + other participants
+     - Linkage to appointment (4B-dependent) + location
+     - FHIR `Encounter` read endpoint
+     - Per-patient encounter list UI ("resume open encounter")
+     - ≤ 3-click DoD re-measured from the Phase 4B "today's
+       schedule" view once it exists -->
+
+### 3.11 Phase 4D — Clinical notes
+
+Phase 4D opened via VS1 Chunks E + F + G. VS1 landed append-only
+note create + list + DoD measurement + CI enforcement. Templates,
+sections, signing, and amendments are Phase 4D follow-on slices.
+
+#### 3.11.1 Phase 4D.1 — Encounter note write + read backend *(landed `c45e16a`)*
+
+- [x] `V19__clinical_encounter_note.sql` lands:
+      `clinical.encounter_note` table with PK, FK to tenant +
+      encounter, denormalized `tenant_id`, `body TEXT CHECK
+      (char_length >= 1 AND <= 20000)`, audit columns,
+      `row_version`. Index `(tenant_id, encounter_id,
+      created_at DESC)` matches the list query path.
+- [x] RLS: both-GUCs select + OWNER/ADMIN insert/update/delete
+      policies.
+- [x] Write stack: `CreateEncounterNote{Command, Validator,
+      Policy, Handler, Auditor}`. Validator enforces
+      trim-nonempty + ≤ 20 000 chars; does NOT strip control
+      chars (newlines legitimate in clinical notes).
+- [x] Read stack: `ListEncounterNotes{Command, Handler, Policy,
+      Auditor, Result}`, newest-first.
+- [x] Two gate beans on `EncounterWriteConfig`:
+      `createEncounterNoteGate`, `listEncounterNotesGate`. Both
+      use `PhiRlsTxHook`.
+- [x] `MedcoreAuthority.{NOTE_READ, NOTE_WRITE}` added. Role
+      map: `OWNER` + `ADMIN` get both; `MEMBER` gets `NOTE_READ`
+      only. Asserted.
+- [x] `AuditAction.{CLINICAL_ENCOUNTER_NOTE_CREATED,
+      CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED}` added. Reason
+      slugs: `intent:clinical.encounter.note.create` (NO body,
+      length, or hash),
+      `intent:clinical.encounter.note.list|count:N` (one audit
+      row per list call, including empty lists).
+- [x] Append-only contract: every `POST /notes` mints a new
+      row. No update surface. Future amendments (Phase 4D
+      follow-on) add via new rows with `amends_id` FK, never
+      mutate existing rows.
+- [x] 404 identity discipline: unknown encounter + cross-tenant
+      encounter return identical 404.
+- [x] Tests: `CreateEncounterNoteIntegrationTest` (10),
+      `ListEncounterNotesIntegrationTest` (6),
+      `EncounterNoteLogPhiLeakageTest` (1). PHI-not-in-reason
+      asserted. All green.
+
+#### 3.11.2 Phase 4D.2 — Note editor + list on encounter page *(landed `13007d9`)*
+
+- [x] `apps/web/src/lib/notes.ts` — typed
+      `createEncounterNote()` + `listEncounterNotes()` +
+      `EncounterNote` type matching `EncounterNoteResponse`.
+- [x] Notes card on `EncounterDetailPage.tsx`, rendered below
+      the encounter detail card with `data-phi` on the card
+      root.
+- [x] Textarea + Save button; Save disabled while textarea is
+      empty/whitespace OR `saveMutation.isPending`.
+- [x] On save success: textarea clears, list refetches via
+      TanStack Query `invalidateQueries`.
+- [x] 403 path: `save-note-error` banner with "You do not have
+      authority…" copy. Non-403 failures surface a generic
+      banner.
+- [x] Empty-state placeholder ("No notes yet.") and
+      newest-first list rendering.
+- [x] Vitest specs: `notes.test.ts` (4) + 5 new cases on
+      `EncounterDetailPage.test.tsx` (9 total incl. Chunk D).
+      All green.
+
+#### 3.11.3 Phase 4D.3 — Playwright DoD + frontend PHI-leakage scan *(landed `1dc34ef`)*
+
+- [x] `apps/web/playwright.config.ts` + `e2e/` directory with
+      URL-aware seeder (`e2e-test` tenant slug, disjoint from
+      manual demo data, preserves `audit.audit_event`).
+- [x] `vs1-happy-path.spec.ts` asserts ≤ 3 clicks + ≤ 90 s.
+- [x] `phi-leakage.spec.ts` scans `localStorage`,
+      `sessionStorage`, `document.cookie`, captured `console.*`
+      against 5 distinctive sentinels (given / family / MRN /
+      birth date / note body) plus a bearer-token sniff.
+- [x] **Measured on 5 consecutive runs** (2026-04-24):
+      median 3 clicks / 158 ms / 0 PHI sentinels / 0 bearer
+      leakage / 0 flakes. Evidence:
+      `docs/evidence/vs1-dod-measurement.md`.
+
+#### 3.11.4 Phase 4D.4 — CI enforcement *(landed at VS1 Chunk G)*
+
+- [x] `.github/workflows/ci.yml` gains `web` job
+      (`pnpm typecheck` + Vitest + `pnpm build`) and `e2e` job
+      (service containers for Postgres + mock-oauth2-server,
+      background API + Vite, Playwright suite, failure-artifact
+      uploads). `e2e` depends on `test` + `web`.
+- [x] Branch-protection requirements documented in
+      `docs/runbooks/ci-cd.md` §3 (operator UI action, not
+      file-based).
+
+#### 3.11.5 Workflow-benchmark
+
+- [x] **≤ 90 s DoD (Phase 4D exit, simple ambulatory visit)**
+      asserted by `vs1-happy-path.spec.ts`. Measured median
+      158 ms across 5 runs — significantly below the 90 s DoD
+      bound. This margin reflects VS1's intentionally thin note
+      surface (free-text only, no templates / sections /
+      signing) and will be re-evaluated as Phase 4D features
+      (templates, sections, signing) are introduced.
+
+#### 3.11.6 Still required for Phase 4D full exit
+
+<!-- TODO(content): populated as each Phase 4D follow-on opens.
+     - Note templates (SOAP, H&P, progress note, procedure note)
+     - Structured sections (subjective, objective, assessment,
+       plan, ROS, PE, HPI) — FHIR-mapped where possible,
+       free-text otherwise
+     - Signing workflow: signed notes are immutable
+     - Amendments: new rows with `amends_id` FK, never mutate
+     - FHIR `DocumentReference` surface (Phase 5A dependency)
+     - ≤ 1-click sign DoD + re-measurement of the ≤ 90 s DoD
+       against the full structured-note surface -->
+
+### 3.12 Phases 4E–4G, 5A–5D, 6A–6D, 7, 8, 9, 10, 11, 12
 
 <!-- TODO(content): populated as each phase opens. Phase 4+ DoD
      entries include the workflow-benchmark-met assertion per §2. -->
@@ -2038,11 +2283,10 @@ A slice at Phase 6D or later additionally satisfies:
 
 ---
 
-*Last reviewed: 2026-04-23 (Phase 4A.5 — first FHIR wire-shape
-endpoint shipped: minimal FHIR R4 Patient mapping, US Core–
-influenced shape. Bare FHIR response body + narrow canonical-
-envelope exception (§12.6). Pattern template v1.2 → v1.3.
-Last backend slice before UI pivot — no further backend until
-vertical-slice plan approved. 455/455 across the full suite).
+*Last reviewed: 2026-04-24 (VS1 wrap — Phases 4A.x+, 4C, 4D
+DoD blocks populated per ADR-005 §2.4 living-per-slice cadence;
+Phase 4B block added as "NOT YET OPENED" with naming-drift
+callout for `5ce4e7d`. Full backend suite green; 47/47 Vitest;
+2/2 Playwright zero-flake on 5 consecutive runs).
 Next review: 2026-05-25, or on the next phase opening
 (whichever is sooner).*
