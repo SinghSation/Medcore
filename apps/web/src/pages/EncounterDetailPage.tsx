@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +12,7 @@ import {
 } from '@/components/ui/card'
 import { ApiError } from '@/lib/api-client'
 import { getEncounter } from '@/lib/encounters'
+import { createEncounterNote, listEncounterNotes } from '@/lib/notes'
 import { useAuth } from '@/providers/AuthProvider'
 
 /**
@@ -48,6 +50,59 @@ export function EncounterDetailPage(): React.JSX.Element {
     signOut()
     navigate('/login', { replace: true })
   }
+
+  // --- Notes (Phase 4D.1) ---
+
+  const queryClient = useQueryClient()
+  const notesQuery = useQuery({
+    queryKey: ['notes', slug, encounterId],
+    queryFn: ({ signal }) =>
+      listEncounterNotes({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+        signal,
+      }),
+    enabled: slug !== undefined && encounterId !== undefined,
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && error.status === 404) return false
+      return failureCount < 1
+    },
+  })
+
+  const [noteDraft, setNoteDraft] = useState('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const saveMutation = useMutation({
+    mutationFn: (body: string) =>
+      createEncounterNote({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+        body,
+      }),
+    onSuccess: () => {
+      setNoteDraft('')
+      setSaveError(null)
+      queryClient.invalidateQueries({
+        queryKey: ['notes', slug, encounterId],
+      })
+    },
+    onError: (err) => {
+      setSaveError(
+        err instanceof ApiError && err.status === 403
+          ? 'You do not have authority to write notes on this tenant.'
+          : 'Could not save note. Try again.',
+      )
+    },
+  })
+
+  function onSaveNote(): void {
+    const body = noteDraft.trim()
+    if (body.length === 0) return
+    setSaveError(null)
+    saveMutation.mutate(body)
+  }
+
+  const canSave =
+    noteDraft.trim().length > 0 && !saveMutation.isPending
 
   const notFound = query.isError && isNotFound(query.error)
   const encounter = query.data
@@ -143,6 +198,97 @@ export function EncounterDetailPage(): React.JSX.Element {
                   </Link>
                 </dd>
               </dl>
+            </CardContent>
+          </Card>
+        )}
+
+        {encounter && (
+          <Card data-phi data-testid="encounter-notes-card">
+            <CardHeader>
+              <CardTitle>Notes</CardTitle>
+              <CardDescription>
+                Append-only. Each save creates a new note.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <label
+                  htmlFor="note-body"
+                  className="text-muted-foreground text-xs font-medium uppercase tracking-wide"
+                >
+                  New note
+                </label>
+                <textarea
+                  id="note-body"
+                  data-testid="note-body-textarea"
+                  value={noteDraft}
+                  onChange={(e) => setNoteDraft(e.target.value)}
+                  disabled={saveMutation.isPending}
+                  rows={4}
+                  maxLength={20000}
+                  placeholder="Write a clinical note…"
+                  className="border-input focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                {saveError !== null && (
+                  <p
+                    role="alert"
+                    className="text-destructive text-xs"
+                    data-testid="save-note-error"
+                  >
+                    {saveError}
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <Button
+                    onClick={onSaveNote}
+                    disabled={!canSave}
+                    data-testid="save-note-button"
+                  >
+                    {saveMutation.isPending ? 'Saving…' : 'Save note'}
+                  </Button>
+                </div>
+              </div>
+
+              <hr className="border-border" />
+
+              <div className="flex flex-col gap-3">
+                {notesQuery.isLoading && (
+                  <p className="text-muted-foreground text-sm">Loading notes…</p>
+                )}
+                {notesQuery.isError && (
+                  <p className="text-destructive text-sm">
+                    Could not load notes.
+                  </p>
+                )}
+                {notesQuery.data && notesQuery.data.items.length === 0 && (
+                  <p
+                    className="text-muted-foreground text-sm"
+                    data-testid="notes-empty"
+                  >
+                    No notes yet.
+                  </p>
+                )}
+                {notesQuery.data && notesQuery.data.items.length > 0 && (
+                  <ul
+                    className="flex flex-col gap-3"
+                    data-testid="notes-list"
+                  >
+                    {notesQuery.data.items.map((n) => (
+                      <li
+                        key={n.id}
+                        className="rounded-md border p-3"
+                      >
+                        <p className="text-muted-foreground mb-1 text-xs">
+                          <span className="font-mono">{n.createdAt}</span> ·
+                          author{' '}
+                          <span className="font-mono">{n.createdBy}</span>
+                        </p>
+                        <p className="whitespace-pre-wrap text-sm">{n.body}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}
