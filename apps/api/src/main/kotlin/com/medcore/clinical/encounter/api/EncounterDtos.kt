@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
+import com.medcore.clinical.encounter.read.ListPatientEncountersResult
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
@@ -96,6 +97,32 @@ data class EncounterResponse(
             updatedBy = snapshot.updatedBy,
             rowVersion = snapshot.rowVersion,
         )
+    }
+}
+
+// ============================================================================
+// Phase 4C.3 — per-patient encounter list envelope
+// ============================================================================
+
+/**
+ * Wire envelope for
+ * `GET /api/v1/tenants/{slug}/patients/{patientId}/encounters`
+ * (Phase 4C.3).
+ *
+ * Un-paginated — see [ListPatientEncountersResult] KDoc. Adding
+ * pagination later is additive (the envelope gains `totalCount`
+ * / `limit` / `offset` fields; existing clients ignoring new
+ * fields continue to work).
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class EncounterListResponse(
+    val items: List<EncounterResponse>,
+) {
+    companion object {
+        fun from(result: ListPatientEncountersResult): EncounterListResponse =
+            EncounterListResponse(
+                items = result.items.map { EncounterResponse.from(it) },
+            )
     }
 }
 

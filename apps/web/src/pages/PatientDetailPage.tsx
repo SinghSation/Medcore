@@ -11,7 +11,11 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { ApiError } from '@/lib/api-client'
-import { startEncounter } from '@/lib/encounters'
+import {
+  listPatientEncounters,
+  startEncounter,
+  type Encounter,
+} from '@/lib/encounters'
 import { getPatient, type PatientDetail } from '@/lib/patients'
 import { useAuth } from '@/providers/AuthProvider'
 
@@ -60,6 +64,21 @@ export function PatientDetailPage(): React.JSX.Element {
     setStartError(null)
     startMutation.mutate()
   }
+
+  const encountersQuery = useQuery({
+    queryKey: ['encounters', 'by-patient', slug, patientId],
+    queryFn: ({ signal }) =>
+      listPatientEncounters({
+        tenantSlug: slug!,
+        patientId: patientId!,
+        signal,
+      }),
+    enabled: slug !== undefined && patientId !== undefined,
+    retry: (failureCount, error) => {
+      if (error instanceof ApiError && error.status === 404) return false
+      return failureCount < 1
+    },
+  })
 
   const notFound = query.isError && isNotFound(query.error)
   const patient = query.data
@@ -228,8 +247,108 @@ export function PatientDetailPage(): React.JSX.Element {
             </CardContent>
           </Card>
         )}
+
+        {patient && (
+          <Card data-phi data-testid="patient-encounters-card">
+            <CardHeader>
+              <CardTitle>Encounters</CardTitle>
+              <CardDescription>
+                All visits for this patient, newest first.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              {encountersQuery.isLoading && (
+                <p className="text-muted-foreground text-sm">
+                  Loading encounters…
+                </p>
+              )}
+              {encountersQuery.isError && (
+                <p className="text-destructive text-sm">
+                  Could not load encounters.
+                </p>
+              )}
+              {encountersQuery.data &&
+                encountersQuery.data.items.length === 0 && (
+                  <p
+                    className="text-muted-foreground text-sm"
+                    data-testid="patient-encounters-empty"
+                  >
+                    No encounters yet.
+                  </p>
+                )}
+              {encountersQuery.data &&
+                encountersQuery.data.items.length > 0 && (
+                  <ul
+                    className="flex flex-col gap-2"
+                    data-testid="patient-encounters-list"
+                  >
+                    {encountersQuery.data.items.map((e) => (
+                      <EncounterRow
+                        key={e.id}
+                        tenantSlug={slug!}
+                        encounter={e}
+                      />
+                    ))}
+                  </ul>
+                )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
+  )
+}
+
+function EncounterRow({
+  tenantSlug,
+  encounter,
+}: {
+  tenantSlug: string
+  encounter: Encounter
+}): React.JSX.Element {
+  const active = encounter.status === 'IN_PROGRESS'
+  return (
+    <li
+      className={
+        active
+          ? 'border-primary/50 bg-primary/5 flex items-center justify-between rounded-md border p-3'
+          : 'flex items-center justify-between rounded-md border p-3'
+      }
+      data-testid="patient-encounter-row"
+      data-encounter-status={encounter.status}
+    >
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2 text-sm">
+          <span
+            className={
+              active
+                ? 'bg-primary/15 text-primary rounded-full px-2 py-0.5 text-xs font-semibold'
+                : 'bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-semibold'
+            }
+          >
+            {encounter.status}
+          </span>
+          <span className="font-mono text-xs">{encounter.encounterClass}</span>
+        </div>
+        <div className="text-muted-foreground text-xs">
+          Started{' '}
+          <span className="font-mono">{encounter.startedAt ?? '—'}</span>
+          {encounter.finishedAt && (
+            <>
+              {' · '}Finished{' '}
+              <span className="font-mono">{encounter.finishedAt}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <Link
+        to={`/tenants/${encodeURIComponent(tenantSlug)}/encounters/${encodeURIComponent(encounter.id)}`}
+        className="text-sm hover:underline"
+        data-testid="patient-encounter-link"
+      >
+        Open →
+      </Link>
+    </li>
   )
 }
 

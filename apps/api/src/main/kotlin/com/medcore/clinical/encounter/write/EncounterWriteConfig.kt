@@ -7,6 +7,10 @@ import com.medcore.clinical.encounter.read.ListEncounterNotesAuditor
 import com.medcore.clinical.encounter.read.ListEncounterNotesCommand
 import com.medcore.clinical.encounter.read.ListEncounterNotesPolicy
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
+import com.medcore.clinical.encounter.read.ListPatientEncountersAuditor
+import com.medcore.clinical.encounter.read.ListPatientEncountersCommand
+import com.medcore.clinical.encounter.read.ListPatientEncountersPolicy
+import com.medcore.clinical.encounter.read.ListPatientEncountersResult
 import com.medcore.platform.read.ReadGate
 import com.medcore.platform.write.PhiRlsTxHook
 import com.medcore.platform.write.WriteGate
@@ -82,6 +86,22 @@ class EncounterWriteConfig {
         txManager: PlatformTransactionManager,
         phiRlsTxHook: PhiRlsTxHook,
     ): ReadGate<ListEncounterNotesCommand, ListEncounterNotesResult> =
+        ReadGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            txHook = phiRlsTxHook,
+        )
+
+    // --- Phase 4C.3: per-patient encounter list ---
+
+    @Bean
+    fun listPatientEncountersGate(
+        policy: ListPatientEncountersPolicy,
+        auditor: ListPatientEncountersAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): ReadGate<ListPatientEncountersCommand, ListPatientEncountersResult> =
         ReadGate(
             policy = policy,
             auditor = auditor,

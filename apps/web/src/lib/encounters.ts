@@ -70,3 +70,31 @@ export async function getEncounter(
     },
   )
 }
+
+/**
+ * Wire shape of `EncounterListResponse` from
+ * `GET /patients/{id}/encounters` (Phase 4C.3). Un-paginated;
+ * envelope mirrors `EncounterNoteList` — `items` only.
+ */
+export interface EncounterList {
+  items: Encounter[]
+}
+
+export interface ListPatientEncountersParams {
+  tenantSlug: string
+  patientId: string
+  signal?: AbortSignal
+}
+
+export async function listPatientEncounters(
+  params: ListPatientEncountersParams,
+): Promise<EncounterList> {
+  const { tenantSlug, patientId, signal } = params
+  return apiFetch<EncounterList>(
+    `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/patients/${encodeURIComponent(patientId)}/encounters`,
+    {
+      tenantSlug,
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  )
+}

@@ -378,6 +378,48 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_ACCESSED("clinical.encounter.accessed"),
 
+    // --- Phase 4C.3: per-patient encounter list ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/patients/{patientId}/encounters`
+     * when the caller lists all encounters for a patient
+     * (Phase 4C.3).
+     *
+     * Bulk-disclosure read, parallel to
+     * [CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED]. Distinct from
+     * [CLINICAL_ENCOUNTER_ACCESSED] (single-encounter read) so
+     * forensic queries can separate "bulk enumeration over a
+     * patient's history" from "single-encounter disclosures".
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.read.ListPatientEncountersAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.encounter"`
+     *   - `resource_id`   = null (list has no single target row;
+     *                       mirrors 4B.1 + 4D.1 list-audit discipline)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.list|count:N"`
+     *
+     * **PHI discipline (NORMATIVE).** Reason carries ONLY the
+     * fixed intent token + one bounded integer (`count`).
+     * Patient UUID is NOT in the reason — forensic narrowing
+     * from audit-row to disclosed encounters happens via the
+     * `request_id` → structured-log join (same pattern as 4B.1).
+     * `patient_id` IS reachable from each disclosed encounter's
+     * own FK but not materialised in the audit row.
+     *
+     * One audit row per call, including when `count = 0`.
+     * A zero-length list IS a disclosure event ("there are no
+     * encounters for this patient yet" is information).
+     *
+     * **Runs INSIDE the ReadGate transaction.** Audit failure
+     * rolls back; the controller never serialises the response;
+     * the caller receives 500 with no PHI disclosure.
+     */
+    CLINICAL_ENCOUNTER_LIST_ACCESSED("clinical.encounter.list_accessed"),
+
     // --- Phase 4D.1: encounter note — clinical documentation (VS1 Chunk E) ---
     /**
      * Emitted on the SUCCESS path of

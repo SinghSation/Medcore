@@ -5,6 +5,9 @@ import com.medcore.clinical.encounter.read.GetEncounterHandler
 import com.medcore.clinical.encounter.read.ListEncounterNotesCommand
 import com.medcore.clinical.encounter.read.ListEncounterNotesHandler
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
+import com.medcore.clinical.encounter.read.ListPatientEncountersCommand
+import com.medcore.clinical.encounter.read.ListPatientEncountersHandler
+import com.medcore.clinical.encounter.read.ListPatientEncountersResult
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.CreateEncounterNoteHandler
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
@@ -70,6 +73,10 @@ class EncounterController(
     private val startEncounterHandler: StartEncounterHandler,
     private val getEncounterGate: ReadGate<GetEncounterCommand, EncounterSnapshot>,
     private val getEncounterHandler: GetEncounterHandler,
+    // --- 4C.3 per-patient encounter list ---
+    private val listPatientEncountersGate:
+        ReadGate<ListPatientEncountersCommand, ListPatientEncountersResult>,
+    private val listPatientEncountersHandler: ListPatientEncountersHandler,
     // --- 4D.1 encounter notes (VS1 Chunk E) ---
     private val createEncounterNoteGate:
         WriteGate<CreateEncounterNoteCommand, EncounterNoteSnapshot>,
@@ -134,6 +141,40 @@ class EncounterController(
         return ResponseEntity.ok()
             .eTag("\"${snapshot.rowVersion}\"")
             .body(responseBody)
+    }
+
+    // ========================================================================
+    // Phase 4C.3 — per-patient encounter list
+    // ========================================================================
+
+    /**
+     * List all encounters for a patient, newest-first by
+     * `started_at` (Phase 4C.3). Emits
+     * `CLINICAL_ENCOUNTER_LIST_ACCESSED` on 200, including for
+     * empty lists. Requires `ENCOUNTER_READ` (all three roles).
+     *
+     * 404 identity discipline: unknown patient + cross-tenant
+     * patient both return identical 404 — no existence leak.
+     */
+    @GetMapping(
+        "/api/v1/tenants/{slug}/patients/{patientId}/encounters",
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun listPatientEncounters(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable patientId: UUID,
+    ): ResponseEntity<ApiResponse<EncounterListResponse>> {
+        val command = ListPatientEncountersCommand(slug = slug, patientId = patientId)
+        val context = WriteContext(principal = principal, idempotencyKey = null)
+        val result = listPatientEncountersGate.apply(command, context) { cmd ->
+            listPatientEncountersHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterListResponse.from(result),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok(responseBody)
     }
 
     // ========================================================================

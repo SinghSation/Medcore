@@ -22,19 +22,21 @@ describe('<PatientDetailPage />', () => {
     clearToken()
   })
 
+  // =====================================================================
+  // Patient detail fields (preserved)
+  // =====================================================================
+
   it('shows loading, then renders all required sections of the populated card', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse(200, {
-        data: detail({
-          id: 'pid-1',
-          nameGiven: 'Ada',
-          nameFamily: 'Lovelace',
-          nameMiddle: 'Augusta',
-          preferredLanguage: 'en-GB',
-        }),
-        requestId: 'r',
+    routeMock({
+      patient: detail({
+        id: 'pid-1',
+        nameGiven: 'Ada',
+        nameFamily: 'Lovelace',
+        nameMiddle: 'Augusta',
+        preferredLanguage: 'en-GB',
       }),
-    )
+      encounters: [],
+    })
 
     renderAt('/tenants/acme-health/patients/pid-1')
 
@@ -56,18 +58,14 @@ describe('<PatientDetailPage />', () => {
   })
 
   it('omits optional fields from the DOM when the wire response omits them', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse(200, {
-        data: detail({
-          id: 'pid-2',
-          nameGiven: 'Grace',
-          nameFamily: 'Hopper',
-          // nameMiddle, preferredLanguage, sexAssignedAtBirth,
-          // genderIdentityCode all unset
-        }),
-        requestId: 'r',
+    routeMock({
+      patient: detail({
+        id: 'pid-2',
+        nameGiven: 'Grace',
+        nameFamily: 'Hopper',
       }),
-    )
+      encounters: [],
+    })
 
     renderAt('/tenants/acme-health/patients/pid-2')
     await screen.findByTestId('patient-detail-card')
@@ -92,12 +90,9 @@ describe('<PatientDetailPage />', () => {
         screen.getByText(/Patient not found or not accessible/),
       ).toBeInTheDocument()
     })
-    // No destructive retry for 404.
     expect(
       screen.queryByRole('button', { name: /Retry/ }),
     ).not.toBeInTheDocument()
-    // Header + not-found-card each render a Back-to-list link —
-    // at least one is present.
     expect(
       screen.getAllByRole('link', { name: /Back to list/ }).length,
     ).toBeGreaterThanOrEqual(1)
@@ -108,10 +103,8 @@ describe('<PatientDetailPage />', () => {
 
     renderAt('/tenants/acme-health/patients/pid-3')
 
-    // Detail page retries once on non-404 errors (see component
-    // retry predicate). TanStack Query's default retry backoff
-    // needs room before the error state finalizes; bump the
-    // waitFor window accordingly.
+    // TanStack Query default retry backoff — give the error state
+    // time to finalize.
     await waitFor(
       () => {
         expect(screen.getByText(/Could not load patient/)).toBeInTheDocument()
@@ -122,43 +115,38 @@ describe('<PatientDetailPage />', () => {
   })
 
   it('PHI container carries the data-phi attribute on the root only', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse(200, {
-        data: detail({
-          id: 'pid-4',
-          nameGiven: 'Katherine',
-          nameFamily: 'Johnson',
-        }),
-        requestId: 'r',
+    routeMock({
+      patient: detail({
+        id: 'pid-4',
+        nameGiven: 'Katherine',
+        nameFamily: 'Johnson',
       }),
-    )
+      encounters: [],
+    })
 
     renderAt('/tenants/acme-health/patients/pid-4')
     const card = await screen.findByTestId('patient-detail-card')
 
-    // The detail card is the single PHI boundary marker. Child
-    // elements must NOT carry their own data-phi attribute; that
-    // is deliberate scope discipline per Rule 04 — boundary
-    // tagging, not per-element tagging.
+    // The detail card is a PHI boundary marker. Child elements inside
+    // the detail card must NOT carry their own data-phi attribute;
+    // that is deliberate scope discipline per Rule 04 — boundary
+    // tagging, not per-element tagging. The sibling encounters card
+    // is its own boundary and has its own data-phi attribute.
     const taggedElements = card.querySelectorAll('[data-phi]')
-    // NodeList includes the card itself (which is the query root),
-    // so exactly ONE element carries the attribute.
     expect(taggedElements.length).toBe(0)
     expect(card).toHaveAttribute('data-phi')
   })
 
   it('does not persist patient detail to localStorage or sessionStorage', async () => {
-    fetchSpy.mockResolvedValue(
-      jsonResponse(200, {
-        data: detail({
-          id: 'pid-5',
-          nameGiven: 'Zylerth',
-          nameFamily: 'Quixomatic',
-          preferredLanguage: 'nan-Latn-TW',
-        }),
-        requestId: 'r',
+    routeMock({
+      patient: detail({
+        id: 'pid-5',
+        nameGiven: 'Zylerth',
+        nameFamily: 'Quixomatic',
+        preferredLanguage: 'nan-Latn-TW',
       }),
-    )
+      encounters: [],
+    })
 
     renderAt('/tenants/acme-health/patients/pid-5')
     await screen.findByText('Quixomatic, Zylerth')
@@ -172,7 +160,64 @@ describe('<PatientDetailPage />', () => {
     expect(session).not.toContain('Zylerth')
   })
 
-  // ---- helpers ----
+  // =====================================================================
+  // Encounters card (Phase 4C.3 — new)
+  // =====================================================================
+
+  it('renders empty state when patient has no encounters', async () => {
+    routeMock({
+      patient: detail({ id: 'pid-6', nameGiven: 'A', nameFamily: 'B' }),
+      encounters: [],
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-6')
+    await screen.findByTestId('patient-detail-card')
+
+    expect(await screen.findByTestId('patient-encounters-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('patient-encounters-list')).not.toBeInTheDocument()
+    // data-phi tagged at the encounters-card root.
+    const encountersCard = screen.getByTestId('patient-encounters-card')
+    expect(encountersCard).toHaveAttribute('data-phi')
+  })
+
+  it('renders encounters newest-first with IN_PROGRESS highlight', async () => {
+    routeMock({
+      patient: detail({ id: 'pid-7', nameGiven: 'A', nameFamily: 'B' }),
+      encounters: [
+        encounterOf('e-2', 'IN_PROGRESS', '2026-04-24T10:00:00Z'),
+        encounterOf('e-1', 'FINISHED', '2026-04-23T10:00:00Z', '2026-04-23T10:30:00Z'),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-7')
+    await screen.findByTestId('patient-encounters-list')
+
+    const rows = screen.getAllByTestId('patient-encounter-row')
+    expect(rows).toHaveLength(2)
+    // Newest first — IN_PROGRESS comes first per server order.
+    expect(rows[0]).toHaveAttribute('data-encounter-status', 'IN_PROGRESS')
+    expect(rows[1]).toHaveAttribute('data-encounter-status', 'FINISHED')
+  })
+
+  it('links each encounter row to the encounter detail route', async () => {
+    routeMock({
+      patient: detail({ id: 'pid-8', nameGiven: 'A', nameFamily: 'B' }),
+      encounters: [
+        encounterOf('enc-42', 'IN_PROGRESS', '2026-04-24T10:00:00Z'),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-8')
+    const link = await screen.findByTestId('patient-encounter-link')
+    expect(link).toHaveAttribute(
+      'href',
+      '/tenants/acme-health/encounters/enc-42',
+    )
+  })
+
+  // =====================================================================
+  // Helpers
+  // =====================================================================
 
   function renderAt(path: string): void {
     const queryClient = new QueryClient({
@@ -192,6 +237,30 @@ describe('<PatientDetailPage />', () => {
         </AuthProvider>
       </MemoryRouter>,
     )
+  }
+
+  /**
+   * URL-aware route mock: `/encounters` GETs return the encounter
+   * list; everything else returns the patient detail.
+   */
+  function routeMock(opts: {
+    patient: ReturnType<typeof detail>
+    encounters: ReturnType<typeof encounterOf>[]
+  }): void {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input)
+      if (url.endsWith('/encounters')) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: { items: opts.encounters },
+            requestId: 'r',
+          }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, { data: opts.patient, requestId: 'r' }),
+      )
+    })
   }
 
   function detail(
@@ -222,6 +291,28 @@ describe('<PatientDetailPage />', () => {
       updatedAt: '2026-04-01T00:00:00Z',
       createdBy: 'u-1',
       updatedBy: 'u-1',
+    }
+  }
+
+  function encounterOf(
+    id: string,
+    status: 'PLANNED' | 'IN_PROGRESS' | 'FINISHED' | 'CANCELLED',
+    startedAt: string,
+    finishedAt?: string,
+  ) {
+    return {
+      id,
+      tenantId: 't-1',
+      patientId: 'pid-any',
+      status,
+      encounterClass: 'AMB' as const,
+      startedAt,
+      ...(finishedAt ? { finishedAt } : {}),
+      createdAt: startedAt,
+      updatedAt: startedAt,
+      createdBy: 'u-1',
+      updatedBy: 'u-1',
+      rowVersion: 0,
     }
   }
 
