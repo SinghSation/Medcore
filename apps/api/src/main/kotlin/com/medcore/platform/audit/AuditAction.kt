@@ -505,8 +505,17 @@ enum class AuditAction(val code: String) {
      *
      * **No no-op suppression.** Signing is a one-shot state
      * transition; attempting to re-sign an already-signed note
-     * returns 409 and emits an `AUTHZ_WRITE_DENIED` denial row
-     * via the standard gate path (not this action).
+     * returns 409 `resource.conflict` with
+     * `details.reason: note_already_signed`. A state conflict
+     * is NOT an authz denial — the handler throws
+     * [com.medcore.platform.write.WriteConflictException],
+     * which [com.medcore.platform.write.WriteGate] catches and
+     * rolls back the transaction WITHOUT calling the auditor's
+     * `onDenied` path. The 409 path therefore emits **no audit
+     * row at all**; clients refetch the note list to reconcile
+     * state. Only [AUTHZ_WRITE_DENIED] is emitted for authz
+     * failures (a distinct surface — see
+     * [com.medcore.platform.write.WriteAuthorizationException]).
      *
      * **Immutability.** Once emitted, the signed note's `body`
      * cannot change — enforced in Kotlin (the handler refuses)

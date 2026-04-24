@@ -210,6 +210,25 @@ class SignEncounterNoteIntegrationTest {
         assertThat(auditRows("clinical.encounter.note.signed")).isEmpty()
     }
 
+    // NOTE: The optimistic-lock race translation path (handler
+    // catches OptimisticLockingFailureException and re-throws
+    // WriteConflictException("note_already_signed")) is NOT
+    // exercised by an integration test in this slice — simulating
+    // a genuine concurrent sign race over the HTTP surface
+    // requires concurrent-tx plumbing (two threads with shared
+    // state, or a Hibernate-interceptor-based test harness) that
+    // we don't have yet. Bumping row_version via the admin DS
+    // BEFORE the test's fresh HTTP call doesn't work — Hibernate
+    // loads the current row_version on fetch, so the `saveAndFlush`
+    // inside the handler succeeds rather than tripping @Version.
+    //
+    // The code change IS in place (see SignEncounterNoteHandler.kt)
+    // and is visually trivial (try/catch around saveAndFlush).
+    // Carry-forward: add a unit test of the handler with a mocked
+    // repository once a mockito-kt dependency lands, OR add a
+    // concurrent-tx integration harness and cover both Signing
+    // and future amendment-conflict slices.
+
     @Test
     fun `DB trigger refuses direct body UPDATE on signed row`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
