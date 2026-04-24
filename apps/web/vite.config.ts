@@ -34,5 +34,9 @@ export default defineConfig({
     css: false,
     restoreMocks: true,
     setupFiles: ['./src/test-setup.ts'],
+    // Playwright specs live in `e2e/` and run under a different
+    // runner — keep Vitest away from them so `pnpm test` stays
+    // a pure unit/component gate.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 })

@@ -75,6 +75,18 @@ web-test: ## Run frontend tests (Vitest + happy-dom)
 web-typecheck: ## TypeScript typecheck for the frontend
 	cd apps/web && pnpm typecheck
 
+.PHONY: e2e
+e2e: ## Run Playwright E2E against the live local stack (requires api-dev + web-dev + docker compose up)
+	cd apps/web && pnpm e2e
+
+.PHONY: e2e-headed
+e2e-headed: ## Run Playwright E2E with a visible browser window
+	cd apps/web && pnpm e2e:headed
+
+.PHONY: e2e-ui
+e2e-ui: ## Open the Playwright interactive UI
+	cd apps/web && pnpm e2e:ui
+
 ##@ Quality gates
 
 .PHONY: format
