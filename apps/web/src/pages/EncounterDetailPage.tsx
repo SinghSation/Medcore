@@ -33,6 +33,16 @@ const CANCEL_REASONS: ReadonlyArray<{ value: CancelReason; label: string }> = [
 ]
 
 /**
+ * Human-readable cancel-reason label. Falls back to the raw
+ * closed-enum token for unknown values (future schema expansion
+ * that this client predates).
+ */
+function cancelReasonLabel(reason: CancelReason | undefined): string {
+  if (reason === undefined) return '—'
+  return CANCEL_REASONS.find((r) => r.value === reason)?.label ?? reason
+}
+
+/**
  * Minimal encounter detail surface (Phase 4C.1, VS1 Chunk D).
  *
  * Deliberately narrow per the approved constraint: shows ONLY
@@ -342,11 +352,8 @@ export function EncounterDetailPage(): React.JSX.Element {
                       {encounter.cancelledAt ?? '—'}
                     </dd>
                     <dt className="text-muted-foreground">Cancel reason</dt>
-                    <dd
-                      className="font-mono"
-                      data-testid="encounter-cancel-reason"
-                    >
-                      {encounter.cancelReason ?? '—'}
+                    <dd data-testid="encounter-cancel-reason">
+                      {cancelReasonLabel(encounter.cancelReason)}
                     </dd>
                   </>
                 )}
@@ -445,16 +452,25 @@ export function EncounterDetailPage(): React.JSX.Element {
                       </div>
                     </div>
                   )}
-                  {lifecycleError !== null && (
-                    <p
-                      role="alert"
-                      className="text-destructive text-xs"
-                      data-testid="encounter-lifecycle-error"
-                    >
-                      {lifecycleError}
-                    </p>
-                  )}
                 </div>
+              )}
+              {/* Lifecycle error banner is rendered OUTSIDE the
+                  IN_PROGRESS conditional — on a 409
+                  `encounter_already_closed`, the refetch flips
+                  status to FINISHED/CANCELLED and the lifecycle
+                  actions block unmounts. Keeping the banner at
+                  card scope means the user still sees WHY their
+                  attempt failed after the state flipped.
+                  CodeRabbit review on PR #2 flagged the
+                  disappearing-banner issue. */}
+              {lifecycleError !== null && (
+                <p
+                  role="alert"
+                  className="text-destructive mt-4 text-xs"
+                  data-testid="encounter-lifecycle-error"
+                >
+                  {lifecycleError}
+                </p>
               )}
             </CardContent>
           </Card>

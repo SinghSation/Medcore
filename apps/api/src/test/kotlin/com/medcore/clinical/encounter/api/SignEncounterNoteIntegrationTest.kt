@@ -230,25 +230,29 @@ class SignEncounterNoteIntegrationTest {
     // and future amendment-conflict slices.
 
     @Test
-    fun `sign on FINISHED encounter — 409 encounter_closed (Phase 4C-5)`() {
+    fun `sign draft on FINISHED encounter — 409 encounter_closed (Phase 4C-5)`() {
+        // Seed an encounter with TWO notes: one we'll sign to
+        // satisfy finish's precondition, one we leave DRAFT. Then
+        // finish the encounter, then try to sign the draft. The
+        // handler's encounter-status guard must fire BEFORE the
+        // note-status guard (the note is still DRAFT, not SIGNED),
+        // so the 409 reason must be `encounter_closed` — not
+        // `note_already_signed`.
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
-        val firstNote = createNote("alice", "acme-health", encounterId, "first")
-        assertThat(postSign("alice", "acme-health", encounterId, firstNote).statusCode)
-            .isEqualTo(HttpStatus.OK)
-        // After signing one note we can FINISH the encounter.
+        val signedCandidate = createNote("alice", "acme-health", encounterId, "to-sign")
+        val draftCandidate = createNote("alice", "acme-health", encounterId, "stays-draft")
+        assertThat(
+            postSign("alice", "acme-health", encounterId, signedCandidate).statusCode,
+        ).isEqualTo(HttpStatus.OK)
         finishEncounterHelper("alice", encounterId)
-        // Any further draft cannot exist now (create is blocked);
-        // so to test the sign-on-closed path we rely on a DRAFT
-        // created BEFORE finish... but finish already succeeded.
-        // Instead, prove the symmetric case: a different encounter
-        // cancelled, with a draft on it, refuses sign.
-        // Here we just assert sign on the finished encounter's
-        // already-signed note returns 409 with
-        // note_already_signed — the more specific check fires
-        // FIRST (before the encounter-closed check), which is
-        // correct since note state is the most specific signal.
-        val resp = postSign("alice", "acme-health", encounterId, firstNote)
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val resp = postSign("alice", "acme-health", encounterId, draftCandidate)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = resp.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_closed")
+        assertThat(auditRows("clinical.encounter.note.signed")).isEmpty()
     }
 
     @Test

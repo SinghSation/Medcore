@@ -519,7 +519,7 @@ describe('<EncounterDetailPage />', () => {
       ).not.toBeInTheDocument()
     })
     expect(screen.getByTestId('encounter-cancel-reason')).toHaveTextContent(
-      'NO_SHOW',
+      /No-show/,
     )
   })
 
