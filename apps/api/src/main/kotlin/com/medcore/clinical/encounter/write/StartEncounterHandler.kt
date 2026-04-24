@@ -105,25 +105,32 @@ class StartEncounterHandler(
             // pre-check and committed first. V22's
             // `uq_clinical_encounter_one_in_progress_per_patient`
             // partial unique index refuses our INSERT. Translate
-            // to the same WriteConflictException the sequential
-            // path throws so callers see an identical 409 body
-            // regardless of which arm fired.
-            val winner = encounterRepository
-                .findInProgressByTenantIdAndPatientId(tenant.id, patient.id)
-            if (winner != null) {
-                throw WriteConflictException(
-                    code = "encounter_in_progress_exists",
-                    cause = ex,
-                    details = mapOf(
-                        "existingEncounterId" to winner.id.toString(),
-                    ),
-                )
-            }
-            // Re-query found no IN_PROGRESS — the violation wasn't
-            // our invariant. Re-throw the original; the generic
-            // 409 handler takes over (`resource.conflict` without
-            // a specific reason).
-            throw ex
+            // to the same WriteConflictException *code* the
+            // sequential path throws so callers still get
+            // `reason: encounter_in_progress_exists`.
+            //
+            // We do NOT re-query for `existingEncounterId` here:
+            // on Postgres, a failed INSERT aborts the outer
+            // transaction (SQLSTATE 25P02, "current transaction is
+            // aborted, commands ignored until end of transaction
+            // block"). A SELECT on the same EntityManager/
+            // connection would fail before reaching the new row.
+            // Running the re-query under a fresh tx would require
+            // injecting a TransactionTemplate with
+            // PROPAGATION_REQUIRES_NEW; given how rare this race
+            // is and that the frontend already handles a details-
+            // less 409 by falling through to its generic error
+            // surface (user reloads → sees the Resume button), we
+            // accept graceful degradation over the extra plumbing.
+            //
+            // Carry-forward: proper race proof via a
+            // `StartEncounterConcurrencyTest` that either mocks
+            // the repository to simulate post-pre-check insertion
+            // or threads two handler calls around a shared gate.
+            throw WriteConflictException(
+                code = "encounter_in_progress_exists",
+                cause = ex,
+            )
         }
         return EncounterSnapshot.from(saved)
     }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
@@ -59,8 +59,10 @@ export function PatientDetailPage(): React.JSX.Element {
   // patient) is a DB invariant (V22's partial unique index). The
   // list is already under V18 SELECT-RLS, so `.find` returns the
   // caller-visible open encounter if any — undefined otherwise.
-  const openEncounter = encountersQuery.data?.items.find(
-    (e) => e.status === 'IN_PROGRESS',
+  // Memoized so unrelated parent re-renders don't re-walk items.
+  const openEncounter = useMemo(
+    () => encountersQuery.data?.items.find((e) => e.status === 'IN_PROGRESS'),
+    [encountersQuery.data?.items],
   )
 
   const [startError, setStartError] = useState<string | null>(null)

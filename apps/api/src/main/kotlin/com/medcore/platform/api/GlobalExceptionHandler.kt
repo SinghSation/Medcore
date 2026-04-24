@@ -242,12 +242,16 @@ class GlobalExceptionHandler {
     fun onWriteConflict(
         ex: WriteConflictException,
     ): ResponseEntity<ErrorResponse> {
-        // Merge `reason` (always) + any structured details the
-        // handler attached (Phase 4C.4: `existingEncounterId` on
-        // double-start conflicts). Values are safe-to-wire
-        // primitives — the exception contract forbids PHI here.
-        val merged: MutableMap<String, Any> = linkedMapOf("reason" to ex.code)
+        // Merge handler-attached details first (Phase 4C.4:
+        // `existingEncounterId` on double-start conflicts), then
+        // stamp `reason` last so a malformed/hostile `details`
+        // map that happens to carry a "reason" key can never
+        // shadow the canonical exception code. Values are safe-
+        // to-wire primitives — the exception contract forbids
+        // PHI here.
+        val merged: MutableMap<String, Any> = linkedMapOf()
         ex.details?.forEach { (k, v) -> merged[k] = v }
+        merged["reason"] = ex.code
         return ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponses.of(
                 code = ErrorCodes.RESOURCE_CONFLICT,
