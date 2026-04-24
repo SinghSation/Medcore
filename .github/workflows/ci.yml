@@ -237,8 +237,9 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # Version comes from `package.json` `packageManager` field
+        # — single source of truth. Specifying `version:` here too
+        # makes pnpm/action-setup@v4 refuse with ERR_PNPM_BAD_PM_VERSION.
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -324,8 +325,9 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # Version comes from `package.json` `packageManager` field
+        # — single source of truth. Specifying `version:` here too
+        # makes pnpm/action-setup@v4 refuse with ERR_PNPM_BAD_PM_VERSION.
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
