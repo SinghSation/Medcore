@@ -1,11 +1,13 @@
 package com.medcore.clinical.encounter.api
 
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.medcore.clinical.encounter.model.CancelReason
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterNoteStatus
 import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
 import com.medcore.clinical.encounter.read.ListPatientEncountersResult
+import com.medcore.clinical.encounter.write.CancelEncounterCommand
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
@@ -77,6 +79,8 @@ data class EncounterResponse(
     val encounterClass: EncounterClass,
     val startedAt: Instant?,
     val finishedAt: Instant?,
+    val cancelledAt: Instant?,
+    val cancelReason: CancelReason?,
     val createdAt: Instant,
     val updatedAt: Instant,
     val createdBy: UUID,
@@ -92,11 +96,54 @@ data class EncounterResponse(
             encounterClass = snapshot.encounterClass,
             startedAt = snapshot.startedAt,
             finishedAt = snapshot.finishedAt,
+            cancelledAt = snapshot.cancelledAt,
+            cancelReason = snapshot.cancelReason,
             createdAt = snapshot.createdAt,
             updatedAt = snapshot.updatedAt,
             createdBy = snapshot.createdBy,
             updatedBy = snapshot.updatedBy,
             rowVersion = snapshot.rowVersion,
+        )
+    }
+}
+
+// ============================================================================
+// Phase 4C.5 — cancel encounter request
+// ============================================================================
+
+/**
+ * HTTP DTO for
+ * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/cancel`
+ * (Phase 4C.5).
+ *
+ * `cancelReason` on the wire is the closed-enum name (e.g.,
+ * `"NO_SHOW"`). Unknown or missing values throw
+ * [WriteValidationException] → 422
+ * `request.validation_failed|format`.
+ */
+data class CancelEncounterRequest(
+    @field:NotNull
+    val cancelReason: String?,
+) {
+    fun toCommand(slug: String, encounterId: UUID): CancelEncounterCommand {
+        val raw = cancelReason
+            ?: throw WriteValidationException(
+                field = "cancelReason",
+                code = "required",
+            )
+        val parsed = try {
+            enumValueOf<CancelReason>(raw)
+        } catch (ex: IllegalArgumentException) {
+            throw WriteValidationException(
+                field = "cancelReason",
+                code = "format",
+                cause = ex,
+            )
+        }
+        return CancelEncounterCommand(
+            slug = slug,
+            encounterId = encounterId,
+            cancelReason = parsed,
         )
     }
 }

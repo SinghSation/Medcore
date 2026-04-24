@@ -33,4 +33,26 @@ interface EncounterNoteRepository : JpaRepository<EncounterNoteEntity, UUID> {
     fun findByEncounterIdOrdered(
         @Param("encounterId") encounterId: UUID,
     ): List<EncounterNoteEntity>
+
+    /**
+     * Count of SIGNED notes on an encounter (Phase 4C.5). The
+     * FINISH handler uses this to enforce the
+     * "encounter must have ≥ 1 signed note before it can be
+     * FINISHED" invariant — the single product decision this
+     * whole 4D.5 → 4C.5 sequencing was built for.
+     *
+     * Executes under V19's `p_encounter_note_select` RLS
+     * envelope. The caller's tenant-membership + RLS GUCs
+     * guarantee we only count rows visible to them.
+     */
+    @Query(
+        """
+        SELECT COUNT(n) FROM EncounterNoteEntity n
+         WHERE n.encounterId = :encounterId
+           AND n.status = com.medcore.clinical.encounter.model.EncounterNoteStatus.SIGNED
+        """,
+    )
+    fun countSignedByEncounterId(
+        @Param("encounterId") encounterId: UUID,
+    ): Long
 }

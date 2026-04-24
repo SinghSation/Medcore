@@ -1,18 +1,19 @@
 package com.medcore.clinical.encounter.write
 
+import com.medcore.clinical.encounter.model.CancelReason
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterStatus
 import java.time.Instant
 import java.util.UUID
 
 /**
- * Immutable projection of a `clinical.encounter` row (Phase 4C.1).
+ * Immutable projection of a `clinical.encounter` row (Phase 4C.1 + 4C.5).
  *
- * Returned by both the write handler ([StartEncounterHandler])
- * and the read handler
- * ([com.medcore.clinical.encounter.read.GetEncounterHandler]) so
- * the same response mapper serves both surfaces. Same discipline
- * as 4A.2 `PatientSnapshot`.
+ * Returned by every encounter handler so the same response mapper
+ * serves all surfaces. Same discipline as 4A.2 `PatientSnapshot`.
+ *
+ * **4C.5 fields:**
+ *   - [cancelledAt] / [cancelReason] — populated ⇔ status = CANCELLED.
  */
 data class EncounterSnapshot(
     val id: UUID,
@@ -22,6 +23,8 @@ data class EncounterSnapshot(
     val encounterClass: EncounterClass,
     val startedAt: Instant?,
     val finishedAt: Instant?,
+    val cancelledAt: Instant?,
+    val cancelReason: CancelReason?,
     val createdAt: Instant,
     val updatedAt: Instant,
     val createdBy: UUID,

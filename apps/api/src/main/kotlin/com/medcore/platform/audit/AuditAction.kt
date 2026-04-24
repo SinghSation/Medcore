@@ -378,6 +378,90 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_ACCESSED("clinical.encounter.accessed"),
 
+    // --- Phase 4C.5: encounter state transitions ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/finish`
+     * when an OWNER/ADMIN transitions an encounter
+     * `IN_PROGRESS → FINISHED` (Phase 4C.5).
+     *
+     * This is the first terminal-state transition on a clinical
+     * resource in Medcore. The transition enforces the invariant
+     * "an encounter can only be FINISHED if at least one note on
+     * it is SIGNED" — handler checks signed-note count before
+     * the save, and returns 409 `resource.conflict` with
+     * `details.reason: encounter_has_no_signed_notes` when the
+     * precondition is unmet.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.FinishEncounterAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId (also `updated_by`)
+     *   - `tenant_id`     = finished encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter"`
+     *   - `resource_id`   = finished encounter UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.finish"`
+     *
+     * **No PHI in the reason slug.** The clinical outcome of the
+     * visit (the note content, the patient identity) is NOT in
+     * the audit row. Forensic resolution goes through
+     * `resource_id`.
+     *
+     * **Conflict path (409 `resource.conflict`).** Two reasons
+     * both throw [com.medcore.platform.write.WriteConflictException]
+     * and emit NO audit row — state conflicts are not authz
+     * failures:
+     *   - `encounter_already_closed` (double-finish or
+     *     finishing a CANCELLED encounter)
+     *   - `encounter_has_no_signed_notes` (invariant unmet)
+     * Clients refetch to reconcile state. Only
+     * [AUTHZ_WRITE_DENIED] is emitted for authz failures.
+     *
+     * **Immutability.** Once emitted, the FINISHED encounter
+     * cannot be further mutated — enforced in Kotlin (handler
+     * refuses) AND in SQL (V21 trigger
+     * `tr_clinical_encounter_immutable_once_closed`).
+     */
+    CLINICAL_ENCOUNTER_FINISHED("clinical.encounter.finished"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/cancel`
+     * when an OWNER/ADMIN transitions an encounter
+     * `IN_PROGRESS → CANCELLED` (Phase 4C.5).
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.CancelEncounterAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = cancelled encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter"`
+     *   - `resource_id`   = cancelled encounter UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.cancel|reason:<CLOSED_ENUM>"`
+     *     where `<CLOSED_ENUM>` is one of the
+     *     [com.medcore.clinical.encounter.model.CancelReason]
+     *     tokens: `NO_SHOW | PATIENT_DECLINED |
+     *     SCHEDULING_ERROR | OTHER`.
+     *
+     * **PHI discipline.** The reason slug carries the fixed
+     * intent token + a closed-enum cancel-reason code. Patient
+     * identity, encounter class, and any free-text reasoning
+     * are NEVER in the audit row.
+     *
+     * **Conflict path (409).** Cancelling an already-closed
+     * encounter throws `WriteConflictException(
+     * "encounter_already_closed")` — no audit row emitted.
+     * Sequential and concurrent re-cancels surface identically
+     * (optimistic-lock translation pattern from 4D.5).
+     *
+     * **Immutability.** Once emitted, the CANCELLED encounter
+     * is immutable at both the handler layer and the V21
+     * trigger.
+     */
+    CLINICAL_ENCOUNTER_CANCELLED("clinical.encounter.cancelled"),
+
     // --- Phase 4C.3: per-patient encounter list ---
     /**
      * Emitted on the SUCCESS path of

@@ -1,5 +1,6 @@
 package com.medcore.clinical.encounter.persistence
 
+import com.medcore.clinical.encounter.model.CancelReason
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterStatus
 import jakarta.persistence.Column
@@ -53,6 +54,14 @@ class EncounterEntity(
 
     @Column(name = "finished_at")
     var finishedAt: Instant? = null,
+
+    // --- 4C.5 cancel fields ---
+    @Column(name = "cancelled_at")
+    var cancelledAt: Instant? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "cancel_reason")
+    var cancelReason: CancelReason? = null,
 
     @Column(name = "created_at", nullable = false, updatable = false)
     var createdAt: Instant,

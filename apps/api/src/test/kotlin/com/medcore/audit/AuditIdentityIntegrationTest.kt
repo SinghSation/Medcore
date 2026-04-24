@@ -43,6 +43,12 @@ class AuditIdentityIntegrationTest {
     fun reset() {
         jdbc = JdbcTemplate(dataSource)
         jdbc.update("DELETE FROM audit.audit_event")
+        // Encounter cleanup must precede patient cleanup — a prior
+        // encounter test may have left rows referencing patients.
+        // Added in 4C.5; the pattern is latent since 4C.1 but was
+        // only surfaced when the new test suite changed ordering.
+        jdbc.update("DELETE FROM clinical.encounter_note")
+        jdbc.update("DELETE FROM clinical.encounter")
         jdbc.update("DELETE FROM clinical.patient_mrn_counter")
         jdbc.update("DELETE FROM clinical.patient_identifier")
         jdbc.update("DELETE FROM clinical.patient")

@@ -58,6 +58,8 @@ class GetEncounterHandler(
             encounterClass = entity.encounterClass,
             startedAt = entity.startedAt,
             finishedAt = entity.finishedAt,
+            cancelledAt = entity.cancelledAt,
+            cancelReason = entity.cancelReason,
             createdAt = entity.createdAt,
             updatedAt = entity.updatedAt,
             createdBy = entity.createdBy,

@@ -370,6 +370,211 @@ describe('<EncounterDetailPage />', () => {
   })
 
   // =====================================================================
+  // Encounter lifecycle: finish + cancel (Phase 4C.5)
+  // =====================================================================
+
+  it('shows lifecycle actions when encounter is IN_PROGRESS', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-l1', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l1')
+    await screen.findByTestId('encounter-detail-card')
+
+    expect(
+      await screen.findByTestId('encounter-lifecycle-actions'),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('finish-encounter-button')).toBeInTheDocument()
+    expect(screen.getByTestId('cancel-encounter-button')).toBeInTheDocument()
+  })
+
+  it('disables Finish and shows helper when no signed notes', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-l2', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [noteOf('n-draft', 'draft body')],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l2')
+    await screen.findByTestId('notes-list')
+
+    const finishBtn = screen.getByTestId('finish-encounter-button')
+    expect(finishBtn).toBeDisabled()
+    expect(screen.getByTestId('finish-encounter-helper')).toHaveTextContent(
+      /at least one signed note/,
+    )
+  })
+
+  it('enables Finish when at least one signed note exists', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-l3', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [
+        signedNoteOf('n-signed', 'signed body', {
+          signedAt: '2026-04-24T15:00:00Z',
+          signedBy: 'u-42',
+        }),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l3')
+    await screen.findByTestId('notes-list')
+
+    expect(screen.getByTestId('finish-encounter-button')).not.toBeDisabled()
+    expect(
+      screen.queryByTestId('finish-encounter-helper'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('hides lifecycle actions + note editor + Sign button when status is FINISHED', async () => {
+    routeMock({
+      encounter: encounter({
+        id: 'e-l4',
+        patientId: 'p-1',
+        status: 'FINISHED',
+        startedAt: '2026-04-24T10:00:00Z',
+      }),
+      notes: [
+        signedNoteOf('n-signed', 'signed body', {
+          signedAt: '2026-04-24T10:30:00Z',
+          signedBy: 'u-42',
+        }),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l4')
+    await screen.findByTestId('encounter-detail-card')
+
+    expect(
+      screen.queryByTestId('encounter-lifecycle-actions'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId('note-body-textarea')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('save-note-button')).not.toBeInTheDocument()
+    // Signed notes render; Sign button is gone (signed already).
+    expect(screen.queryByTestId('sign-note-button')).not.toBeInTheDocument()
+  })
+
+  it('shows cancel picker with reason select and Confirm flow', async () => {
+    let cancelled = false
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input)
+      const method = inputAsInit(input).method
+      if (url.endsWith('/cancel') && method === 'POST') {
+        cancelled = true
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: encounter({
+              id: 'e-l5',
+              patientId: 'p-1',
+              status: 'CANCELLED',
+              startedAt: '2026-04-24T10:00:00Z',
+            }),
+            requestId: 'r',
+          }),
+        )
+      }
+      if (url.endsWith('/notes')) {
+        return Promise.resolve(
+          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+        )
+      }
+      // encounter GET — returns CANCELLED after /cancel succeeds.
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: cancelled
+            ? {
+                ...encounter({
+                  id: 'e-l5',
+                  patientId: 'p-1',
+                  status: 'CANCELLED',
+                  startedAt: '2026-04-24T10:00:00Z',
+                }),
+                cancelledAt: '2026-04-24T10:30:00Z',
+                cancelReason: 'NO_SHOW',
+              }
+            : encounter({
+                id: 'e-l5',
+                patientId: 'p-1',
+                status: 'IN_PROGRESS',
+                startedAt: '2026-04-24T10:00:00Z',
+              }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l5')
+    await screen.findByTestId('encounter-detail-card')
+
+    await userEvent.click(screen.getByTestId('cancel-encounter-button'))
+    expect(screen.getByTestId('cancel-encounter-picker')).toBeInTheDocument()
+    // Default selection is NO_SHOW.
+    expect(
+      (screen.getByTestId('cancel-reason-select') as HTMLSelectElement).value,
+    ).toBe('NO_SHOW')
+    await userEvent.click(screen.getByTestId('confirm-cancel-button'))
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId('encounter-lifecycle-actions'),
+      ).not.toBeInTheDocument()
+    })
+    expect(screen.getByTestId('encounter-cancel-reason')).toHaveTextContent(
+      'NO_SHOW',
+    )
+  })
+
+  it('shows encounter_has_no_signed_notes error when finish 409s with that reason', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input)
+      const method = inputAsInit(input).method
+      if (url.endsWith('/finish') && method === 'POST') {
+        return Promise.resolve(
+          jsonResponse(409, {
+            code: 'resource.conflict',
+            message: 'conflict',
+            details: { reason: 'encounter_has_no_signed_notes' },
+          }),
+        )
+      }
+      if (url.endsWith('/notes')) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: {
+              items: [
+                signedNoteOf('n-signed', 'stale cache', {
+                  signedAt: '2026-04-24T10:00:00Z',
+                  signedBy: 'u-42',
+                }),
+              ],
+            },
+            requestId: 'r',
+          }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: encounter({
+            id: 'e-l6',
+            patientId: 'p-1',
+            status: 'IN_PROGRESS',
+          }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-l6')
+    await screen.findByTestId('finish-encounter-button')
+    await userEvent.click(screen.getByTestId('finish-encounter-button'))
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('encounter-lifecycle-error'),
+      ).toHaveTextContent(/at least one signed note/)
+    })
+  })
+
+  // =====================================================================
   // Helpers
   // =====================================================================
 

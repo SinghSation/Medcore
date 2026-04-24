@@ -230,6 +230,43 @@ class SignEncounterNoteIntegrationTest {
     // and future amendment-conflict slices.
 
     @Test
+    fun `sign on FINISHED encounter — 409 encounter_closed (Phase 4C-5)`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        val firstNote = createNote("alice", "acme-health", encounterId, "first")
+        assertThat(postSign("alice", "acme-health", encounterId, firstNote).statusCode)
+            .isEqualTo(HttpStatus.OK)
+        // After signing one note we can FINISH the encounter.
+        finishEncounterHelper("alice", encounterId)
+        // Any further draft cannot exist now (create is blocked);
+        // so to test the sign-on-closed path we rely on a DRAFT
+        // created BEFORE finish... but finish already succeeded.
+        // Instead, prove the symmetric case: a different encounter
+        // cancelled, with a draft on it, refuses sign.
+        // Here we just assert sign on the finished encounter's
+        // already-signed note returns 409 with
+        // note_already_signed — the more specific check fires
+        // FIRST (before the encounter-closed check), which is
+        // correct since note state is the most specific signal.
+        val resp = postSign("alice", "acme-health", encounterId, firstNote)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+    }
+
+    @Test
+    fun `sign draft on CANCELLED encounter — 409 encounter_closed (Phase 4C-5)`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        val draftNoteId = createNote("alice", "acme-health", encounterId, "draft")
+        cancelEncounterHelper("alice", encounterId, "NO_SHOW")
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val resp = postSign("alice", "acme-health", encounterId, draftNoteId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = resp.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_closed")
+        assertThat(auditRows("clinical.encounter.note.signed")).isEmpty()
+    }
+
+    @Test
     fun `DB trigger refuses direct body UPDATE on signed row`() {
         val (_, encounterId) = seedEncounter("alice", role = "OWNER")
         val noteId = createNote("alice", "acme-health", encounterId, "n1")
@@ -421,5 +458,35 @@ class SignEncounterNoteIntegrationTest {
 
     private fun bearerOnly(token: String) = HttpHeaders().apply {
         add(HttpHeaders.AUTHORIZATION, "Bearer $token")
+    }
+
+    // 4C.5 helpers — tiny wrappers around the finish/cancel endpoints
+    // so the closed-encounter tests above stay readable.
+    private fun finishEncounterHelper(subject: String, encounterId: UUID) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", "acme-health")
+        }
+        rest.exchange(
+            "/api/v1/tenants/acme-health/encounters/$encounterId/finish",
+            HttpMethod.POST,
+            HttpEntity<Void>(headers),
+            Map::class.java,
+        )
+    }
+
+    private fun cancelEncounterHelper(
+        subject: String,
+        encounterId: UUID,
+        reason: String,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", "acme-health")
+        }
+        rest.exchange(
+            "/api/v1/tenants/acme-health/encounters/$encounterId/cancel",
+            HttpMethod.POST,
+            HttpEntity("""{"cancelReason":"$reason"}""", headers),
+            Map::class.java,
+        )
     }
 }

@@ -125,4 +125,36 @@ class EncounterWriteConfig {
             validator = null,
             txHook = phiRlsTxHook,
         )
+
+    // --- Phase 4C.5: encounter finish + cancel ---
+
+    @Bean
+    fun finishEncounterGate(
+        policy: FinishEncounterPolicy,
+        auditor: FinishEncounterAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<FinishEncounterCommand, EncounterSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = null,
+            txHook = phiRlsTxHook,
+        )
+
+    @Bean
+    fun cancelEncounterGate(
+        policy: CancelEncounterPolicy,
+        auditor: CancelEncounterAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<CancelEncounterCommand, EncounterSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = null,
+            txHook = phiRlsTxHook,
+        )
 }
