@@ -179,6 +179,148 @@ class StartEncounterIntegrationTest {
         assertThat(auditRows("clinical.encounter.started")).isEmpty()
     }
 
+    // ========================================================================
+    // Phase 4C.4 — at most one IN_PROGRESS per (tenant, patient)
+    // ========================================================================
+
+    @Test
+    fun `second Start while IN_PROGRESS exists — 409 with existingEncounterId`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+
+        val first = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(first.statusCode).isEqualTo(HttpStatus.CREATED)
+        @Suppress("UNCHECKED_CAST")
+        val firstData = first.body!!["data"] as Map<String, Any>
+        val firstEncounterId = firstData["id"] as String
+        val encounterCountBefore = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM clinical.encounter", Long::class.java,
+        )
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val second = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(second.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        assertThat(second.body!!["code"]).isEqualTo("resource.conflict")
+        @Suppress("UNCHECKED_CAST")
+        val details = second.body!!["details"] as Map<String, Any?>
+        assertThat(details["reason"]).isEqualTo("encounter_in_progress_exists")
+        assertThat(details["existingEncounterId"]).isEqualTo(firstEncounterId)
+
+        // No second encounter row; no second CLINICAL_ENCOUNTER_STARTED audit.
+        assertThat(
+            jdbc.queryForObject("SELECT COUNT(*) FROM clinical.encounter", Long::class.java),
+        ).isEqualTo(encounterCountBefore)
+        assertThat(auditRows("clinical.encounter.started")).isEmpty()
+    }
+
+    @Test
+    fun `Start succeeds after FINISHED encounter (closed does not block)`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+
+        val first = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(first.statusCode).isEqualTo(HttpStatus.CREATED)
+        @Suppress("UNCHECKED_CAST")
+        val firstId = UUID.fromString(
+            (first.body!!["data"] as Map<String, Any>)["id"] as String,
+        )
+        // Add + sign a note so FINISH precondition is satisfied.
+        val noteId = createNoteHelper("alice", "acme-health", firstId, "note")
+        signNoteHelper("alice", "acme-health", firstId, noteId)
+        finishEncounterHelper("alice", "acme-health", firstId)
+
+        val second = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(second.statusCode).isEqualTo(HttpStatus.CREATED)
+    }
+
+    @Test
+    fun `Start succeeds after CANCELLED encounter (closed does not block)`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+
+        val first = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(first.statusCode).isEqualTo(HttpStatus.CREATED)
+        @Suppress("UNCHECKED_CAST")
+        val firstId = UUID.fromString(
+            (first.body!!["data"] as Map<String, Any>)["id"] as String,
+        )
+        cancelEncounterHelper("alice", "acme-health", firstId, "NO_SHOW")
+
+        val second = post("alice", "acme-health", patientId, """{"encounterClass":"AMB"}""")
+        assertThat(second.statusCode).isEqualTo(HttpStatus.CREATED)
+    }
+
+    @Test
+    fun `IN_PROGRESS on one patient does NOT block Start on a different patient in same tenant`() {
+        val user = provisionUser("alice")
+        val tenant = seedTenant("acme-health")
+        seedMembership(tenant, user, role = "OWNER")
+        val patientA = createPatient("alice", "acme-health")
+        // A second patient must be demographically distinct to
+        // dodge the 4A.2 DuplicatePatientDetector.
+        val patientB = createPatientWith(
+            "alice", "acme-health",
+            nameGiven = "Grace", nameFamily = "Hopper",
+            birthDate = "1906-12-09",
+        )
+
+        assertThat(
+            post("alice", "acme-health", patientA, """{"encounterClass":"AMB"}""")
+                .statusCode,
+        ).isEqualTo(HttpStatus.CREATED)
+        // Patient B's first Start must succeed — the IN_PROGRESS
+        // on patient A is not its concern. Invariant is per-patient.
+        assertThat(
+            post("alice", "acme-health", patientB, """{"encounterClass":"AMB"}""")
+                .statusCode,
+        ).isEqualTo(HttpStatus.CREATED)
+    }
+
+    @Test
+    fun `DB constraint refuses a second IN_PROGRESS inserted directly via admin DS`() {
+        // Belt-and-braces: handler pre-check is bypassable via
+        // direct SQL; V22's partial unique index must still refuse
+        // the second IN_PROGRESS row. Confirms the index is active
+        // and correctly scoped (tenant_id, patient_id).
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+        val tenantId = jdbc.queryForObject(
+            "SELECT id FROM tenancy.tenant WHERE slug = 'acme-health'",
+            UUID::class.java,
+        )!!
+        val userId = jdbc.queryForObject(
+            "SELECT id FROM identity.\"user\" WHERE subject = 'alice'",
+            UUID::class.java,
+        )!!
+
+        // First IN_PROGRESS via direct INSERT (bypassing RLS via
+        // admin DS is fine in this test — we own the connection).
+        jdbc.update(
+            """
+            INSERT INTO clinical.encounter(
+                id, tenant_id, patient_id, status, encounter_class,
+                started_at, finished_at,
+                created_at, updated_at, created_by, updated_by, row_version
+            ) VALUES (?, ?, ?, 'IN_PROGRESS', 'AMB',
+                now(), NULL, now(), now(), ?, ?, 0)
+            """.trimIndent(),
+            UUID.randomUUID(), tenantId, patientId, userId, userId,
+        )
+
+        val thrown = org.assertj.core.api.Assertions.catchThrowable {
+            jdbc.update(
+                """
+                INSERT INTO clinical.encounter(
+                    id, tenant_id, patient_id, status, encounter_class,
+                    started_at, finished_at,
+                    created_at, updated_at, created_by, updated_by, row_version
+                ) VALUES (?, ?, ?, 'IN_PROGRESS', 'AMB',
+                    now(), NULL, now(), now(), ?, ?, 0)
+                """.trimIndent(),
+                UUID.randomUUID(), tenantId, patientId, userId, userId,
+            )
+        }
+        assertThat(thrown)
+            .isNotNull
+            .hasMessageContaining("uq_clinical_encounter_one_in_progress_per_patient")
+    }
+
     // ---- helpers ----
 
     private fun seedPatient(subject: String, role: String = "OWNER"): Pair<UUID, UUID> {
@@ -189,22 +331,106 @@ class StartEncounterIntegrationTest {
         return user to patientId
     }
 
-    private fun createPatient(subject: String, slug: String): UUID {
+    private fun createPatient(subject: String, slug: String): UUID =
+        createPatientWith(
+            subject, slug,
+            nameGiven = "Ada",
+            nameFamily = "Lovelace",
+            birthDate = "1960-05-15",
+        )
+
+    private fun createPatientWith(
+        subject: String,
+        slug: String,
+        nameGiven: String,
+        nameFamily: String,
+        birthDate: String,
+        administrativeSex: String = "female",
+    ): UUID {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
+        val body =
+            """{"nameGiven":"$nameGiven","nameFamily":"$nameFamily","birthDate":"$birthDate","administrativeSex":"$administrativeSex"}"""
         val resp = rest.exchange(
             "/api/v1/tenants/$slug/patients",
             HttpMethod.POST,
-            HttpEntity(
-                """{"nameGiven":"Ada","nameFamily":"Lovelace","birthDate":"1960-05-15","administrativeSex":"female"}""",
-                headers,
-            ),
+            HttpEntity(body, headers),
             Map::class.java,
         )
         @Suppress("UNCHECKED_CAST")
         val data = resp.body!!["data"] as Map<String, Any>
         return UUID.fromString(data["id"] as String)
+    }
+
+    private fun createNoteHelper(
+        subject: String,
+        slug: String,
+        encounterId: UUID,
+        body: String,
+    ): UUID {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", slug)
+        }
+        val resp = rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes",
+            HttpMethod.POST,
+            HttpEntity("""{"body":"$body"}""", headers),
+            Map::class.java,
+        )
+        @Suppress("UNCHECKED_CAST")
+        val data = resp.body!!["data"] as Map<String, Any>
+        return UUID.fromString(data["id"] as String)
+    }
+
+    private fun signNoteHelper(
+        subject: String,
+        slug: String,
+        encounterId: UUID,
+        noteId: UUID,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", slug)
+        }
+        rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes/$noteId/sign",
+            HttpMethod.POST,
+            HttpEntity<Void>(headers),
+            Map::class.java,
+        )
+    }
+
+    private fun finishEncounterHelper(
+        subject: String,
+        slug: String,
+        encounterId: UUID,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", slug)
+        }
+        rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/finish",
+            HttpMethod.POST,
+            HttpEntity<Void>(headers),
+            Map::class.java,
+        )
+    }
+
+    private fun cancelEncounterHelper(
+        subject: String,
+        slug: String,
+        encounterId: UUID,
+        reason: String,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", slug)
+        }
+        rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/cancel",
+            HttpMethod.POST,
+            HttpEntity("""{"cancelReason":"$reason"}""", headers),
+            Map::class.java,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

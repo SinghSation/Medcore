@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -216,6 +216,137 @@ describe('<PatientDetailPage />', () => {
   })
 
   // =====================================================================
+  // Resume-encounter button + 409 redirect (Phase 4C.4 — new)
+  // =====================================================================
+
+  it('renders Start button when no IN_PROGRESS encounter exists', async () => {
+    routeMock({
+      patient: detail({ id: 'pid-9', nameGiven: 'A', nameFamily: 'B' }),
+      encounters: [
+        encounterOf('e-old', 'FINISHED', '2026-04-23T10:00:00Z', '2026-04-23T10:30:00Z'),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-9')
+    await screen.findByTestId('patient-detail-card')
+
+    expect(
+      await screen.findByTestId('start-encounter-button'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('resume-encounter-button'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders Resume button pointing at the open encounter when one is IN_PROGRESS', async () => {
+    routeMock({
+      patient: detail({ id: 'pid-10', nameGiven: 'A', nameFamily: 'B' }),
+      encounters: [
+        encounterOf('e-open', 'IN_PROGRESS', '2026-04-24T10:00:00Z'),
+        encounterOf('e-old', 'FINISHED', '2026-04-23T10:00:00Z', '2026-04-23T10:30:00Z'),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-10')
+    const resume = await screen.findByTestId('resume-encounter-button')
+    // Resume is a <Link> under a shadcn <Button asChild /> — assert
+    // the anchor href rather than clicking through.
+    const anchor = resume.tagName === 'A' ? resume : resume.querySelector('a')
+    expect(anchor).not.toBeNull()
+    expect(anchor!.getAttribute('href')).toBe(
+      '/tenants/acme-health/encounters/e-open',
+    )
+    expect(
+      screen.queryByTestId('start-encounter-button'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('Start → 409 encounter_in_progress_exists redirects to the existing encounter', async () => {
+    // Encounters list loads empty (stale view — another tab won the
+    // race); Start then POSTs and gets a 409 whose details.body
+    // carries `existingEncounterId`. Handler must navigate there.
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input)
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (method === 'POST' && url.endsWith('/encounters')) {
+        return Promise.resolve(
+          jsonResponse(409, {
+            code: 'resource.conflict',
+            message: 'The request conflicts with the current state of the resource.',
+            details: {
+              reason: 'encounter_in_progress_exists',
+              existingEncounterId: 'e-winner',
+            },
+          }),
+        )
+      }
+      if (url.endsWith('/encounters')) {
+        return Promise.resolve(
+          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: detail({ id: 'pid-11', nameGiven: 'A', nameFamily: 'B' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-11')
+    const start = await screen.findByTestId('start-encounter-button')
+    fireEvent.click(start)
+
+    // The catch-all route renders a marker once navigate() fires.
+    expect(
+      await screen.findByTestId('encounter-detail-route-marker'),
+    ).toHaveTextContent('encounter:e-winner')
+    // No user-facing error — the redirect IS the handling.
+    expect(
+      screen.queryByTestId('start-encounter-error'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('Start → 409 without existingEncounterId falls back to generic error (no redirect)', async () => {
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input)
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (method === 'POST' && url.endsWith('/encounters')) {
+        return Promise.resolve(
+          jsonResponse(409, {
+            code: 'resource.conflict',
+            message: 'conflict',
+            // no details.reason — simulates an unexpected 409 shape.
+            details: {},
+          }),
+        )
+      }
+      if (url.endsWith('/encounters')) {
+        return Promise.resolve(
+          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: detail({ id: 'pid-12', nameGiven: 'A', nameFamily: 'B' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/patients/pid-12')
+    const start = await screen.findByTestId('start-encounter-button')
+    fireEvent.click(start)
+
+    expect(
+      await screen.findByTestId('start-encounter-error'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('encounter-detail-route-marker'),
+    ).not.toBeInTheDocument()
+  })
+
+  // =====================================================================
   // Helpers
   // =====================================================================
 
@@ -231,6 +362,13 @@ describe('<PatientDetailPage />', () => {
               <Route
                 path="/tenants/:slug/patients/:patientId"
                 element={<PatientDetailPage />}
+              />
+              {/* Marker route so 4C.4 redirect tests can assert
+                  navigation without bringing up EncounterDetailPage
+                  and its own fetch graph. */}
+              <Route
+                path="/tenants/:slug/encounters/:encounterId"
+                element={<EncounterRouteMarker />}
               />
             </Routes>
           </QueryClientProvider>
@@ -323,3 +461,12 @@ describe('<PatientDetailPage />', () => {
     })
   }
 })
+
+function EncounterRouteMarker(): React.JSX.Element {
+  const { encounterId } = useParams<{ encounterId: string }>()
+  return (
+    <div data-testid="encounter-detail-route-marker">
+      encounter:{encounterId}
+    </div>
+  )
+}

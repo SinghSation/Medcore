@@ -241,14 +241,25 @@ class GlobalExceptionHandler {
     @ExceptionHandler(WriteConflictException::class)
     fun onWriteConflict(
         ex: WriteConflictException,
-    ): ResponseEntity<ErrorResponse> =
-        ResponseEntity.status(HttpStatus.CONFLICT).body(
+    ): ResponseEntity<ErrorResponse> {
+        // Merge handler-attached details first (Phase 4C.4:
+        // `existingEncounterId` on double-start conflicts), then
+        // stamp `reason` last so a malformed/hostile `details`
+        // map that happens to carry a "reason" key can never
+        // shadow the canonical exception code. Values are safe-
+        // to-wire primitives — the exception contract forbids
+        // PHI here.
+        val merged: MutableMap<String, Any> = linkedMapOf()
+        ex.details?.forEach { (k, v) -> merged[k] = v }
+        merged["reason"] = ex.code
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponses.of(
                 code = ErrorCodes.RESOURCE_CONFLICT,
                 message = "The request conflicts with the current state of the resource.",
-                details = mapOf("reason" to ex.code),
+                details = merged,
             ),
         )
+    }
 
     @ExceptionHandler(OptimisticLockingFailureException::class, ObjectOptimisticLockingFailureException::class)
     fun onOptimisticLock(

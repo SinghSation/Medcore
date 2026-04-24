@@ -42,4 +42,30 @@ interface EncounterRepository : JpaRepository<EncounterEntity, UUID> {
         tenantId: UUID,
         patientId: UUID,
     ): List<EncounterEntity>
+
+    /**
+     * The single IN_PROGRESS encounter on a patient within a
+     * tenant, if any (Phase 4C.4). `null` when none exists.
+     *
+     * V22's partial unique index
+     * `uq_clinical_encounter_one_in_progress_per_patient`
+     * guarantees at most one row matches this predicate — the
+     * handler's pre-check uses this method to 409 on double-
+     * start, and the 409 body's `existingEncounterId` comes
+     * straight from the returned row.
+     *
+     * Runs under V18's SELECT RLS envelope.
+     */
+    @Query(
+        """
+        SELECT e FROM EncounterEntity e
+         WHERE e.tenantId = :tenantId
+           AND e.patientId = :patientId
+           AND e.status = com.medcore.clinical.encounter.model.EncounterStatus.IN_PROGRESS
+        """,
+    )
+    fun findInProgressByTenantIdAndPatientId(
+        tenantId: UUID,
+        patientId: UUID,
+    ): EncounterEntity?
 }

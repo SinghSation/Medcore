@@ -41,4 +41,20 @@ package com.medcore.platform.write
 class WriteConflictException(
     val code: String,
     cause: Throwable? = null,
+    /**
+     * Optional structured context for the conflict (Phase 4C.4).
+     * When non-null, [com.medcore.platform.api.GlobalExceptionHandler]
+     * merges the entries into the 409 response's `details` map
+     * alongside the standard `reason` slug. Values must be
+     * safe-to-wire primitives (typically UUIDs as strings); the
+     * map MUST NOT carry PHI — `reason` + `details` are emitted
+     * to clients and logged on inbound request lines.
+     *
+     * Today's only user is the 4C.4 double-start check, which
+     * adds `existingEncounterId` so the caller can redirect to
+     * the already-open encounter. Future conflicts can reuse the
+     * slot (e.g., `rowVersion` for optimistic-lock surfacing)
+     * without changing the exception API.
+     */
+    val details: Map<String, Any>? = null,
 ) : RuntimeException("write conflict: code=$code", cause)

@@ -38,6 +38,7 @@ import {
   E2E_PATIENT_NAME_FAMILY,
   E2E_PATIENT_NAME_GIVEN,
   E2E_TENANT_SLUG,
+  resetEncountersForE2eTenant,
 } from './fixtures/seed'
 
 function requireEnv(name: string): string {
@@ -49,6 +50,13 @@ function requireEnv(name: string): string {
 }
 
 test.describe('Frontend PHI leakage — storage + cookies + console', () => {
+  // Phase 4C.4: per-patient IN_PROGRESS is unique (V22). Reset
+  // so we always see Start (not Resume) on the detail page,
+  // regardless of sibling-spec ordering.
+  test.beforeEach(async () => {
+    await resetEncountersForE2eTenant()
+  })
+
   test('no PHI sentinel appears in localStorage / sessionStorage / cookies / console', async ({
     page,
   }) => {

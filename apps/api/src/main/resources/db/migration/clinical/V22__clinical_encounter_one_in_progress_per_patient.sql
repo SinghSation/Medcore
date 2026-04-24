@@ -1,0 +1,63 @@
+-- V22__clinical_encounter_one_in_progress_per_patient.sql — Phase 4C.4
+--
+-- Enforces the invariant "at most one IN_PROGRESS encounter per
+-- (tenant, patient)" at the database layer via a partial unique
+-- index. Defense-in-depth complement to
+-- `StartEncounterHandler`'s pre-insert check — the handler is the
+-- user-facing error surface, this index is the race-proof last
+-- line of defense.
+--
+-- ### Why this migration was sequenced this way
+--
+-- Prior to Phase 4C.4, nothing prevented the Start-encounter
+-- write path from minting a second IN_PROGRESS encounter on a
+-- patient who already had one open. Double-click, two browser
+-- tabs, or a back-end retry would all produce a parallel
+-- IN_PROGRESS row that silently corrupted the clinical data
+-- model (two "open" visits for one patient at one time).
+--
+-- A handler-only check-then-insert leaves a narrow but real race
+-- window: both requests pass the check, both INSERTs succeed.
+-- This index makes the second INSERT fail at the DB layer with
+-- `ERRCODE = unique_violation`. The handler catches that specific
+-- violation and translates to the same
+-- `WriteConflictException("encounter_in_progress_exists")` the
+-- sequential pre-check path already throws — callers see an
+-- identical 409 body whether they raced or arrived in sequence.
+--
+-- ### Pre-migration data cleanup (IMPORTANT)
+--
+-- Because this index is PARTIAL on `status = 'IN_PROGRESS'`, it
+-- can only be created when NO patient already has more than one
+-- IN_PROGRESS encounter. Dev / pilot databases that accumulated
+-- duplicates under the pre-4C.4 behavior must be cleaned up
+-- BEFORE this migration applies, or Flyway will fail with:
+--
+--     ERROR: could not create unique index
+--            "uq_clinical_encounter_one_in_progress_per_patient"
+--     DETAIL: Key (tenant_id, patient_id) = (...) is duplicated.
+--
+-- Pre-migration check:
+--
+--     SELECT tenant_id, patient_id, COUNT(*)
+--       FROM clinical.encounter
+--      WHERE status = 'IN_PROGRESS'
+--      GROUP BY tenant_id, patient_id
+--     HAVING COUNT(*) > 1;
+--
+-- Remediation (operator decision — not part of this migration):
+-- keep the most-recent IN_PROGRESS per (tenant, patient) by
+-- `started_at DESC, created_at DESC, id DESC`; cancel the rest
+-- via the /cancel API or (for non-production dev DBs) a
+-- controlled SQL transaction that uses `audit.append_event()` to
+-- preserve the chain. The local-dev cleanup for this repo's
+-- maintainer was run as a one-shot transaction on 2026-04-24
+-- (commit body documents the rules + counts).
+--
+-- ### Strictly additive + reversible
+--
+--   DROP INDEX IF EXISTS clinical.uq_clinical_encounter_one_in_progress_per_patient;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clinical_encounter_one_in_progress_per_patient
+    ON clinical.encounter (tenant_id, patient_id)
+    WHERE status = 'IN_PROGRESS';

@@ -201,10 +201,19 @@ class SignEncounterNoteIntegrationTest {
             UUID::class.java,
             encounterId1,
         )!!
-        val encounterId2 = createEncounterHttp("alice", "acme-health", patientId)
+        // Create the DRAFT on e1 FIRST while e1 is IN_PROGRESS
+        // (note creation requires an open encounter). Then cancel
+        // e1 so opening e2 on the same patient doesn't trip the
+        // 4C.4 per-patient IN_PROGRESS invariant (V22).
         val noteOnE1 = createNote("alice", "acme-health", encounterId1, "on-e1")
+        cancelEncounterHelper("alice", encounterId1, "NO_SHOW")
+        val encounterId2 = createEncounterHttp("alice", "acme-health", patientId)
         jdbc.update("DELETE FROM audit.audit_event")
 
+        // Route to e2 with a noteId that belongs to e1. The handler
+        // checks e2 first (IN_PROGRESS, ok), loads the note, then
+        // rejects on `note.encounterId != e2.id` → 404, URL-path
+        // mismatch without leaking note identity.
         val resp = postSign("alice", "acme-health", encounterId2, noteOnE1)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
         assertThat(auditRows("clinical.encounter.note.signed")).isEmpty()

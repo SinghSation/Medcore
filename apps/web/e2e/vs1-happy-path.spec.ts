@@ -29,6 +29,7 @@ import {
   E2E_PATIENT_MRN,
   E2E_PATIENT_NAME_FAMILY,
   E2E_TENANT_SLUG,
+  resetEncountersForE2eTenant,
 } from './fixtures/seed'
 
 const DOD_MAX_CLICKS_TO_ENCOUNTER = 3
@@ -45,6 +46,14 @@ function requireEnv(name: string): string {
 }
 
 test.describe('VS1 happy path — DoD', () => {
+  // Phase 4C.4: per-patient IN_PROGRESS is unique (V22). The
+  // sibling phi-leakage spec opens an encounter on the same
+  // seeded patient; without this reset we'd land on the detail
+  // page and see Resume instead of Start.
+  test.beforeEach(async () => {
+    await resetEncountersForE2eTenant()
+  })
+
   test('login → encounter started → note saved, inside both DoDs', async ({
     page,
   }) => {
