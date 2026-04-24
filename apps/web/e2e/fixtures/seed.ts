@@ -160,6 +160,44 @@ async function createOwnerMembership(
   )
 }
 
+/**
+ * Per-test reset of encounter + note rows for the E2E tenant.
+ *
+ * Global setup seeds the tenant / patient / membership once per
+ * suite. Individual specs land rows (IN_PROGRESS encounters,
+ * notes) that MUST NOT leak into sibling specs — 4C.4's per-
+ * patient IN_PROGRESS uniqueness invariant (V22) turns any such
+ * leak into a UI state mismatch (Resume button instead of Start).
+ *
+ * Call this from a `beforeEach` in every spec that touches
+ * encounters. Audit rows survive per ADR-003 §2 (append-only
+ * chain).
+ */
+export async function resetEncountersForE2eTenant(): Promise<void> {
+  const client = new Client(pgEnv())
+  await client.connect()
+  try {
+    const existing = await client.query<{ id: string }>(
+      'SELECT id FROM tenancy.tenant WHERE slug = $1',
+      [E2E_TENANT_SLUG],
+    )
+    if (!existing.rowCount || !existing.rows[0]) {
+      return
+    }
+    const tenantId = existing.rows[0].id
+    await client.query(
+      `DELETE FROM clinical.encounter_note WHERE tenant_id = $1`,
+      [tenantId],
+    )
+    await client.query(
+      `DELETE FROM clinical.encounter WHERE tenant_id = $1`,
+      [tenantId],
+    )
+  } finally {
+    await client.end()
+  }
+}
+
 async function createPatient(
   client: Client,
   tenantId: string,
