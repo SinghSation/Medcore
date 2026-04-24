@@ -378,6 +378,64 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_ACCESSED("clinical.encounter.accessed"),
 
+    // --- Phase 4D.1: encounter note — clinical documentation (VS1 Chunk E) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
+     * when an OWNER/ADMIN creates a new clinical note tied to an
+     * encounter (Phase 4D.1).
+     *
+     * First clinical-documentation write audit action in Medcore.
+     * Append-only: every note save creates a new row and emits a
+     * new row here.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.CreateEncounterNoteAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = parent encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter.note"`
+     *   - `resource_id`   = newly-minted note UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.note.create"`
+     *
+     * **No PHI in the reason slug.** The note body is PHI; it
+     * never appears in the audit row. Body length, character
+     * counts, and any derived metadata that could narrow the
+     * body's identity are ALSO not in the reason. Forensic
+     * lookup of the specific note goes through `resource_id` →
+     * the RLS-gated `clinical.encounter_note` SELECT path.
+     */
+    CLINICAL_ENCOUNTER_NOTE_CREATED("clinical.encounter.note.created"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
+     * when the caller successfully lists the notes for an
+     * encounter (Phase 4D.1).
+     *
+     * Bulk-disclosure read. Distinct from a (not-yet-shipped)
+     * `CLINICAL_ENCOUNTER_NOTE_ACCESSED` single-note read so
+     * forensic queries can separate bulk-list from single-item
+     * reads. Closed-enum tokens only in the reason.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.read.ListEncounterNotesAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = parent encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter.note"`
+     *   - `resource_id`   = null (list has no single target row;
+     *                       mirrors 4B.1 list-audit discipline)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.note.list|count:N"`
+     *
+     * One row per list call, including zero-item results. An
+     * empty list IS a disclosure event ("there are no notes for
+     * this encounter yet" is information).
+     */
+    CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED("clinical.encounter.note.list_accessed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

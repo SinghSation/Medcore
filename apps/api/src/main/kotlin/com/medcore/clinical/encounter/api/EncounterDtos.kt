@@ -3,6 +3,9 @@ package com.medcore.clinical.encounter.api
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterStatus
+import com.medcore.clinical.encounter.read.ListEncounterNotesResult
+import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
+import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
 import com.medcore.clinical.encounter.write.StartEncounterCommand
 import com.medcore.platform.write.WriteValidationException
@@ -93,5 +96,92 @@ data class EncounterResponse(
             updatedBy = snapshot.updatedBy,
             rowVersion = snapshot.rowVersion,
         )
+    }
+}
+
+// ============================================================================
+// Phase 4D.1 — encounter note DTOs (VS1 Chunk E)
+// ============================================================================
+
+/**
+ * HTTP DTO for
+ * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
+ * (Phase 4D.1, VS1 Chunk E).
+ *
+ * The body is PHI (free-text clinical content). The validator
+ * at [com.medcore.clinical.encounter.write.CreateEncounterNoteValidator]
+ * runs after Bean Validation and enforces trim-nonempty +
+ * length ≤ 20,000 chars, matching V19's CHECK constraint.
+ */
+data class CreateEncounterNoteRequest(
+    @field:NotNull
+    val body: String?,
+) {
+    fun toCommand(slug: String, encounterId: UUID): CreateEncounterNoteCommand {
+        val raw = body
+            ?: throw WriteValidationException(field = "body", code = "required")
+        return CreateEncounterNoteCommand(
+            slug = slug,
+            encounterId = encounterId,
+            body = raw,
+        )
+    }
+}
+
+/**
+ * Wire shape for encounter-note create + list responses
+ * (Phase 4D.1, VS1 Chunk E).
+ *
+ * Body is PHI — served to the caller, never logged. The audit
+ * row for the corresponding create / list call contains only
+ * closed-enum tokens (see
+ * [com.medcore.clinical.encounter.write.CreateEncounterNoteAuditor]
+ * and
+ * [com.medcore.clinical.encounter.read.ListEncounterNotesAuditor]).
+ */
+data class EncounterNoteResponse(
+    val id: UUID,
+    val tenantId: UUID,
+    val encounterId: UUID,
+    val body: String,
+    val createdAt: Instant,
+    val updatedAt: Instant,
+    val createdBy: UUID,
+    val updatedBy: UUID,
+    val rowVersion: Long,
+) {
+    companion object {
+        fun from(snapshot: EncounterNoteSnapshot): EncounterNoteResponse =
+            EncounterNoteResponse(
+                id = snapshot.id,
+                tenantId = snapshot.tenantId,
+                encounterId = snapshot.encounterId,
+                body = snapshot.body,
+                createdAt = snapshot.createdAt,
+                updatedAt = snapshot.updatedAt,
+                createdBy = snapshot.createdBy,
+                updatedBy = snapshot.updatedBy,
+                rowVersion = snapshot.rowVersion,
+            )
+    }
+}
+
+/**
+ * Wire envelope for
+ * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
+ * (Phase 4D.1).
+ *
+ * Un-paginated in 4D.1 (see [ListEncounterNotesResult] KDoc).
+ * Adding pagination later is additive.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class EncounterNoteListResponse(
+    val items: List<EncounterNoteResponse>,
+) {
+    companion object {
+        fun from(result: ListEncounterNotesResult): EncounterNoteListResponse =
+            EncounterNoteListResponse(
+                items = result.items.map { EncounterNoteResponse.from(it) },
+            )
     }
 }

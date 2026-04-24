@@ -2,6 +2,12 @@ package com.medcore.clinical.encounter.api
 
 import com.medcore.clinical.encounter.read.GetEncounterCommand
 import com.medcore.clinical.encounter.read.GetEncounterHandler
+import com.medcore.clinical.encounter.read.ListEncounterNotesCommand
+import com.medcore.clinical.encounter.read.ListEncounterNotesHandler
+import com.medcore.clinical.encounter.read.ListEncounterNotesResult
+import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
+import com.medcore.clinical.encounter.write.CreateEncounterNoteHandler
+import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
 import com.medcore.clinical.encounter.write.StartEncounterCommand
 import com.medcore.clinical.encounter.write.StartEncounterHandler
@@ -64,6 +70,13 @@ class EncounterController(
     private val startEncounterHandler: StartEncounterHandler,
     private val getEncounterGate: ReadGate<GetEncounterCommand, EncounterSnapshot>,
     private val getEncounterHandler: GetEncounterHandler,
+    // --- 4D.1 encounter notes (VS1 Chunk E) ---
+    private val createEncounterNoteGate:
+        WriteGate<CreateEncounterNoteCommand, EncounterNoteSnapshot>,
+    private val createEncounterNoteHandler: CreateEncounterNoteHandler,
+    private val listEncounterNotesGate:
+        ReadGate<ListEncounterNotesCommand, ListEncounterNotesResult>,
+    private val listEncounterNotesHandler: ListEncounterNotesHandler,
 ) {
 
     /**
@@ -121,5 +134,68 @@ class EncounterController(
         return ResponseEntity.ok()
             .eTag("\"${snapshot.rowVersion}\"")
             .body(responseBody)
+    }
+
+    // ========================================================================
+    // Phase 4D.1 — encounter notes (VS1 Chunk E)
+    // ========================================================================
+
+    /**
+     * Create a clinical note tied to an encounter (Phase 4D.1).
+     * Append-only — every call mints a new row. Emits
+     * `CLINICAL_ENCOUNTER_NOTE_CREATED` on 201. Requires
+     * `NOTE_WRITE` (OWNER/ADMIN).
+     */
+    @PostMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/notes",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun createEncounterNote(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+        @Valid @RequestBody body: CreateEncounterNoteRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<ApiResponse<EncounterNoteResponse>> {
+        val command = body.toCommand(slug, encounterId)
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = createEncounterNoteGate.apply(command, context) { cmd ->
+            createEncounterNoteHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterNoteResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.status(HttpStatus.CREATED)
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
+    }
+
+    /**
+     * List all notes for an encounter, newest first (Phase 4D.1).
+     * Emits `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED` on 200,
+     * including for empty lists. Requires `NOTE_READ` (all
+     * three roles).
+     */
+    @GetMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/notes",
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun listEncounterNotes(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+    ): ResponseEntity<ApiResponse<EncounterNoteListResponse>> {
+        val command = ListEncounterNotesCommand(slug = slug, encounterId = encounterId)
+        val context = WriteContext(principal = principal, idempotencyKey = null)
+        val result = listEncounterNotesGate.apply(command, context) { cmd ->
+            listEncounterNotesHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterNoteListResponse.from(result),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok(responseBody)
     }
 }

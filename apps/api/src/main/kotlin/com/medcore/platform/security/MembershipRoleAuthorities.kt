@@ -44,6 +44,9 @@ object MembershipRoleAuthorities {
         // Encounter (clinical) — full access (Phase 4C.1).
         MedcoreAuthority.ENCOUNTER_READ,
         MedcoreAuthority.ENCOUNTER_WRITE,
+        // Clinical notes — full access (Phase 4D.1).
+        MedcoreAuthority.NOTE_READ,
+        MedcoreAuthority.NOTE_WRITE,
     )
 
     val ADMIN_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -62,6 +65,9 @@ object MembershipRoleAuthorities {
         // Encounter (clinical) — full access (Phase 4C.1).
         MedcoreAuthority.ENCOUNTER_READ,
         MedcoreAuthority.ENCOUNTER_WRITE,
+        // Clinical notes — full access (Phase 4D.1).
+        MedcoreAuthority.NOTE_READ,
+        MedcoreAuthority.NOTE_WRITE,
     )
 
     val MEMBER_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -76,6 +82,8 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.PATIENT_READ,
         // Encounter (clinical) — READ only (Phase 4C.1).
         MedcoreAuthority.ENCOUNTER_READ,
+        // Clinical notes — READ only (Phase 4D.1).
+        MedcoreAuthority.NOTE_READ,
     )
 
     private val MAPPING: Map<MembershipRole, Set<MedcoreAuthority>> = mapOf(

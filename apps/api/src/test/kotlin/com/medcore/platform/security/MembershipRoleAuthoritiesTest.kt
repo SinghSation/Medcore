@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
 class MembershipRoleAuthoritiesTest {
 
     @Test
-    fun `OWNER holds every tenancy + patient + encounter authority including TENANT_DELETE`() {
+    fun `OWNER holds every tenancy + patient + encounter + note authority including TENANT_DELETE`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.OWNER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -27,6 +27,8 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.PATIENT_UPDATE,
                 MedcoreAuthority.ENCOUNTER_READ,
                 MedcoreAuthority.ENCOUNTER_WRITE,
+                MedcoreAuthority.NOTE_READ,
+                MedcoreAuthority.NOTE_WRITE,
             )
     }
 
@@ -48,7 +50,7 @@ class MembershipRoleAuthoritiesTest {
     }
 
     @Test
-    fun `MEMBER holds READ authorities including PATIENT_READ + ENCOUNTER_READ but no writes`() {
+    fun `MEMBER holds READ authorities (patient, encounter, note) but no writes`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.MEMBER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -59,13 +61,16 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.PATIENT_READ,
                 // Phase 4C.1: read-only access to encounters.
                 MedcoreAuthority.ENCOUNTER_READ,
+                // Phase 4D.1: read-only access to clinical notes.
+                MedcoreAuthority.NOTE_READ,
             )
-        // Explicitly confirm MEMBER cannot mutate patient or
-        // encounter records.
+        // Explicitly confirm MEMBER cannot mutate patient, encounter,
+        // or note records.
         val member = MembershipRoleAuthorities.forRole(MembershipRole.MEMBER)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_CREATE)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_UPDATE)
         assertThat(member).doesNotContain(MedcoreAuthority.ENCOUNTER_WRITE)
+        assertThat(member).doesNotContain(MedcoreAuthority.NOTE_WRITE)
     }
 
     @Test

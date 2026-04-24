@@ -25,20 +25,22 @@ import org.springframework.jdbc.core.JdbcTemplate
 
 /**
  * End-to-end coverage for
- * `GET /api/v1/tenants/{slug}/encounters/{encounterId}`
- * (Phase 4C.1, VS1 Chunk D).
+ * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
+ * (Phase 4D.1, VS1 Chunk E).
  *
  * Proves:
- *   1. Happy path: 200 + body + ETag + ONE
- *      `CLINICAL_ENCOUNTER_ACCESSED` audit row.
- *   2. All three roles (OWNER / ADMIN / MEMBER) can read.
- *   3. 404 unknown encounter — no audit.
- *   4. 404 cross-tenant encounter — no existence leak, no audit.
- *   5. Filter-level denial (no membership) — 403, no access audit.
+ *   1. Happy path: 200 + items array (newest first) + ONE
+ *      `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED` audit row with
+ *      reason `"intent:clinical.encounter.note.list|count:N"`.
+ *   2. Empty list: 200 with items=[] + ONE audit row (count:0).
+ *   3. All three roles can read.
+ *   4. 404 on unknown / cross-tenant encounter.
+ *   5. Filter-level denial (no membership) — 403 + no list
+ *      audit row.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration::class)
-class GetEncounterIntegrationTest {
+class ListEncounterNotesIntegrationTest {
 
     @Autowired lateinit var rest: TestRestTemplate
     @Autowired lateinit var mockOAuth2Server: MockOAuth2Server
@@ -64,79 +66,85 @@ class GetEncounterIntegrationTest {
     }
 
     @Test
-    fun `OWNER reads encounter — 200 + body + ETag + CLINICAL_ENCOUNTER_ACCESSED audit`() {
-        val encounterId = seedEncounter("alice", role = "OWNER")
+    fun `OWNER lists 3 notes newest-first — 200 + ONE list-access audit row`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        createNote("alice", "acme-health", encounterId, "first")
+        Thread.sleep(5)
+        createNote("alice", "acme-health", encounterId, "second")
+        Thread.sleep(5)
+        createNote("alice", "acme-health", encounterId, "third")
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val response = get("alice", "acme-health", encounterId)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
-        assertThat(response.headers.eTag).isEqualTo("\"0\"")
+        val resp = get("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
 
-        val data = response.body!!["data"] as Map<*, *>
-        assertThat(data["id"]).isEqualTo(encounterId.toString())
-        assertThat(data["status"]).isEqualTo("IN_PROGRESS")
+        val data = resp.body!!["data"] as Map<*, *>
+        val items = data["items"] as List<*>
+        assertThat(items).hasSize(3)
 
-        val audit = auditRows("clinical.encounter.accessed")
-        assertThat(audit).hasSize(1)
-        val row = audit.single()
-        assertThat(row["reason"]).isEqualTo("intent:clinical.encounter.access")
-        assertThat(row["resource_type"]).isEqualTo("clinical.encounter")
-        assertThat(row["resource_id"]).isEqualTo(encounterId.toString())
+        val row = auditRows("clinical.encounter.note.list_accessed").single()
+        assertThat(row["reason"])
+            .isEqualTo("intent:clinical.encounter.note.list|count:3")
+        assertThat(row["resource_type"]).isEqualTo("clinical.encounter.note")
+        assertThat(row["resource_id"]).isNull()
         assertThat(row["outcome"]).isEqualTo("SUCCESS")
     }
 
     @Test
-    fun `MEMBER can read encounter — 200 (ENCOUNTER_READ granted to all roles)`() {
+    fun `empty list still emits ONE list-access audit with count=0`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val resp = get("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
+        val items = ((resp.body!!["data"] as Map<*, *>)["items"]) as List<*>
+        assertThat(items).isEmpty()
+
+        val row = auditRows("clinical.encounter.note.list_accessed").single()
+        assertThat(row["reason"])
+            .isEqualTo("intent:clinical.encounter.note.list|count:0")
+    }
+
+    @Test
+    fun `MEMBER can list notes — 200 (NOTE_READ granted to all roles)`() {
         val owner = provisionUser("owner")
         val member = provisionUser("alice")
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, owner, role = "OWNER")
         seedMembership(tenant, member, role = "MEMBER")
         val patientId = createPatient("owner", "acme-health")
-        val encounterId = createEncounter("owner", "acme-health", patientId)
+        val encounterId = createEncounterHttp("owner", "acme-health", patientId)
+        createNote("owner", "acme-health", encounterId, "clinical observation")
 
-        val response = get("alice", "acme-health", encounterId)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+        val resp = get("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
     }
 
     @Test
-    fun `ADMIN can read encounter — 200`() {
-        val owner = provisionUser("owner")
-        val admin = provisionUser("alice")
-        val tenant = seedTenant("acme-health")
-        seedMembership(tenant, owner, role = "OWNER")
-        seedMembership(tenant, admin, role = "ADMIN")
-        val patientId = createPatient("owner", "acme-health")
-        val encounterId = createEncounter("owner", "acme-health", patientId)
-
-        val response = get("alice", "acme-health", encounterId)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
-    }
-
-    @Test
-    fun `unknown encounterId — 404 with NO access audit`() {
-        val (_, _) = seedPatient("alice", role = "OWNER")
+    fun `unknown encounterId — 404 with NO list-access audit`() {
+        val (_, _) = seedEncounter("alice", role = "OWNER")
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val response = get("alice", "acme-health", UUID.randomUUID())
-        assertThat(response.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
-        assertThat(auditRows("clinical.encounter.accessed")).isEmpty()
+        val resp = get("alice", "acme-health", UUID.randomUUID())
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
+        assertThat(auditRows("clinical.encounter.note.list_accessed")).isEmpty()
     }
 
     @Test
-    fun `cross-tenant encounterId — 404, no audit (no existence leak)`() {
+    fun `cross-tenant encounter — 404, no audit, no leak`() {
         val alice = provisionUser("alice")
         val tenantA = seedTenant("tenant-a")
         val tenantB = seedTenant("tenant-b")
         seedMembership(tenantA, alice, role = "OWNER")
         seedMembership(tenantB, alice, role = "OWNER")
         val patientInA = createPatient("alice", "tenant-a")
-        val encounterInA = createEncounter("alice", "tenant-a", patientInA)
+        val encounterInA = createEncounterHttp("alice", "tenant-a", patientInA)
+        createNote("alice", "tenant-a", encounterInA, "tenant-A-note")
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val response = get("alice", "tenant-b", encounterInA)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
-        assertThat(auditRows("clinical.encounter.accessed")).isEmpty()
+        val resp = get("alice", "tenant-b", encounterInA)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
+        assertThat(auditRows("clinical.encounter.note.list_accessed")).isEmpty()
     }
 
     @Test
@@ -146,27 +154,23 @@ class GetEncounterIntegrationTest {
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, owner, role = "OWNER")
         val patientId = createPatient("owner", "acme-health")
-        val encounterId = createEncounter("owner", "acme-health", patientId)
+        val encounterId = createEncounterHttp("owner", "acme-health", patientId)
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val response = get("alice", "acme-health", encounterId)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.FORBIDDEN)
-        assertThat(auditRows("clinical.encounter.accessed")).isEmpty()
+        val resp = get("alice", "acme-health", encounterId)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.FORBIDDEN)
+        assertThat(auditRows("clinical.encounter.note.list_accessed")).isEmpty()
     }
 
     // ---- helpers ----
 
-    private fun seedEncounter(subject: String, role: String): UUID {
-        val (_, patientId) = seedPatient(subject, role)
-        return createEncounter(subject, "acme-health", patientId)
-    }
-
-    private fun seedPatient(subject: String, role: String = "OWNER"): Pair<UUID, UUID> {
+    private fun seedEncounter(subject: String, role: String = "OWNER"): Pair<UUID, UUID> {
         val user = provisionUser(subject)
         val tenant = seedTenant("acme-health")
         seedMembership(tenant, user, role = role)
         val patientId = createPatient(subject, "acme-health")
-        return user to patientId
+        val encounterId = createEncounterHttp(subject, "acme-health", patientId)
+        return user to encounterId
     }
 
     private fun createPatient(subject: String, slug: String): UUID {
@@ -187,11 +191,7 @@ class GetEncounterIntegrationTest {
         return UUID.fromString(data["id"] as String)
     }
 
-    private fun createEncounter(
-        subject: String,
-        slug: String,
-        patientId: UUID,
-    ): UUID {
+    private fun createEncounterHttp(subject: String, slug: String, patientId: UUID): UUID {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
@@ -206,6 +206,23 @@ class GetEncounterIntegrationTest {
         return UUID.fromString(data["id"] as String)
     }
 
+    private fun createNote(
+        subject: String,
+        slug: String,
+        encounterId: UUID,
+        body: String,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", slug)
+        }
+        rest.exchange(
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes",
+            HttpMethod.POST,
+            HttpEntity("""{"body":"$body"}""", headers),
+            Map::class.java,
+        )
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun get(
         subject: String,
@@ -216,7 +233,7 @@ class GetEncounterIntegrationTest {
             add("X-Medcore-Tenant", slug)
         }
         return rest.exchange(
-            "/api/v1/tenants/$slug/encounters/$encounterId",
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes",
             HttpMethod.GET,
             HttpEntity<Void>(headers),
             Map::class.java,

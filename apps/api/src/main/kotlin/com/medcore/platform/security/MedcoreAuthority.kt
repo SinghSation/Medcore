@@ -59,6 +59,16 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     ENCOUNTER_READ("MEDCORE_ENCOUNTER_READ"),
     ENCOUNTER_WRITE("MEDCORE_ENCOUNTER_WRITE"),
 
+    // --- Clinical-note authorities (Phase 4D.1, VS1 Chunk E) ---
+    // Role map (4D.1, documented simplification):
+    //   OWNER + ADMIN — NOTE_READ + NOTE_WRITE
+    //   MEMBER        — NOTE_READ only
+    // Signing, amendments, and any per-section write grants (e.g.,
+    // NOTE_SIGN, NOTE_AMEND) are Phase 4D follow-on slices and
+    // will split NOTE_WRITE further at that time.
+    NOTE_READ("MEDCORE_NOTE_READ"),
+    NOTE_WRITE("MEDCORE_NOTE_WRITE"),
+
     // --- System-scope (bootstrap, admin ops) ---
     /**
      * Reserved for bootstrap / admin operations that must bypass
