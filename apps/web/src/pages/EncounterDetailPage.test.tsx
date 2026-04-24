@@ -238,6 +238,138 @@ describe('<EncounterDetailPage />', () => {
   })
 
   // =====================================================================
+  // Note signing (Phase 4D.5 — new)
+  // =====================================================================
+
+  it('renders Draft badge + Sign button on unsigned notes', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-s1', patientId: 'p-1' }),
+      notes: [noteOf('n-draft', 'Draft note')],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-s1')
+    await screen.findByTestId('notes-list')
+
+    const row = screen.getByTestId('note-row')
+    expect(row).toHaveAttribute('data-note-status', 'DRAFT')
+    expect(screen.getByTestId('note-status-badge')).toHaveTextContent('Draft')
+    expect(screen.getByTestId('sign-note-button')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('note-signed-attribution'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('hides Sign button and shows signed-on line on signed notes', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-s2', patientId: 'p-1' }),
+      notes: [
+        signedNoteOf('n-signed', 'Signed body', {
+          signedAt: '2026-04-24T15:00:00Z',
+          signedBy: 'u-42',
+        }),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-s2')
+    await screen.findByTestId('notes-list')
+
+    const row = screen.getByTestId('note-row')
+    expect(row).toHaveAttribute('data-note-status', 'SIGNED')
+    expect(screen.getByTestId('note-status-badge')).toHaveTextContent('Signed')
+    expect(screen.queryByTestId('sign-note-button')).not.toBeInTheDocument()
+    const attribution = screen.getByTestId('note-signed-attribution')
+    expect(attribution).toHaveTextContent(/2026-04-24T15:00:00Z/)
+    expect(attribution).toHaveTextContent(/u-42/)
+  })
+
+  it('clicking Sign transitions the note to signed and refetches', async () => {
+    let signed = false
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input)
+      const method = inputAsInit(input).method
+      if (url.endsWith('/sign') && method === 'POST') {
+        signed = true
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: signedNoteOf('n-draft', 'Draft body', {
+              signedAt: '2026-04-24T15:05:00Z',
+              signedBy: 'u-42',
+            }),
+            requestId: 'r',
+          }),
+        )
+      }
+      if (url.endsWith('/notes')) {
+        const items = signed
+          ? [
+              signedNoteOf('n-draft', 'Draft body', {
+                signedAt: '2026-04-24T15:05:00Z',
+                signedBy: 'u-42',
+              }),
+            ]
+          : [noteOf('n-draft', 'Draft body')]
+        return Promise.resolve(
+          jsonResponse(200, { data: { items }, requestId: 'r' }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: encounter({ id: 'e-s3', patientId: 'p-1' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-s3')
+    await screen.findByTestId('notes-list')
+
+    await userEvent.click(screen.getByTestId('sign-note-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('note-status-badge')).toHaveTextContent(
+        'Signed',
+      )
+    })
+    expect(screen.queryByTestId('sign-note-button')).not.toBeInTheDocument()
+  })
+
+  it('shows a 403 error banner when the sign is denied', async () => {
+    fetchSpy.mockImplementation((input) => {
+      const url = String(input)
+      const method = inputAsInit(input).method
+      if (url.endsWith('/sign') && method === 'POST') {
+        return Promise.resolve(
+          jsonResponse(403, { error: { code: 'auth.forbidden' } }),
+        )
+      }
+      if (url.endsWith('/notes')) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: { items: [noteOf('n-draft', 'Draft body')] },
+            requestId: 'r',
+          }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: encounter({ id: 'e-s4', patientId: 'p-1' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-s4')
+    await screen.findByTestId('notes-list')
+    await userEvent.click(screen.getByTestId('sign-note-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sign-note-error')).toHaveTextContent(
+        /You do not have authority/,
+      )
+    })
+  })
+
+  // =====================================================================
   // Helpers
   // =====================================================================
 
@@ -269,7 +401,7 @@ describe('<EncounterDetailPage />', () => {
    */
   function routeMock(opts: {
     encounter: ReturnType<typeof encounter>
-    notes: ReturnType<typeof noteOf>[]
+    notes: Array<ReturnType<typeof noteOf> | ReturnType<typeof signedNoteOf>>
   }): void {
     fetchSpy.mockImplementation((input) => {
       const url = String(input)
@@ -313,11 +445,33 @@ describe('<EncounterDetailPage />', () => {
       tenantId: 't-1',
       encounterId: 'e-any',
       body,
+      status: 'DRAFT' as const,
       createdAt: '2026-04-24T10:00:00Z',
       updatedAt: '2026-04-24T10:00:00Z',
       createdBy: 'u-1',
       updatedBy: 'u-1',
       rowVersion: 0,
+    }
+  }
+
+  function signedNoteOf(
+    id: string,
+    body: string,
+    signing: { signedAt: string; signedBy: string },
+  ) {
+    return {
+      id,
+      tenantId: 't-1',
+      encounterId: 'e-any',
+      body,
+      status: 'SIGNED' as const,
+      signedAt: signing.signedAt,
+      signedBy: signing.signedBy,
+      createdAt: '2026-04-24T10:00:00Z',
+      updatedAt: signing.signedAt,
+      createdBy: 'u-1',
+      updatedBy: signing.signedBy,
+      rowVersion: 1,
     }
   }
 

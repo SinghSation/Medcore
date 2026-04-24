@@ -2,6 +2,7 @@ package com.medcore.clinical.encounter.api
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.clinical.encounter.model.EncounterClass
+import com.medcore.clinical.encounter.model.EncounterNoteStatus
 import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
 import com.medcore.clinical.encounter.read.ListPatientEncountersResult
@@ -166,11 +167,16 @@ data class CreateEncounterNoteRequest(
  * and
  * [com.medcore.clinical.encounter.read.ListEncounterNotesAuditor]).
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 data class EncounterNoteResponse(
     val id: UUID,
     val tenantId: UUID,
     val encounterId: UUID,
     val body: String,
+    val status: EncounterNoteStatus,
+    val signedAt: Instant?,
+    val signedBy: UUID?,
+    val amendsId: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant,
     val createdBy: UUID,
@@ -184,6 +190,10 @@ data class EncounterNoteResponse(
                 tenantId = snapshot.tenantId,
                 encounterId = snapshot.encounterId,
                 body = snapshot.body,
+                status = snapshot.status,
+                signedAt = snapshot.signedAt,
+                signedBy = snapshot.signedBy,
+                amendsId = snapshot.amendsId,
                 createdAt = snapshot.createdAt,
                 updatedAt = snapshot.updatedAt,
                 createdBy = snapshot.createdBy,

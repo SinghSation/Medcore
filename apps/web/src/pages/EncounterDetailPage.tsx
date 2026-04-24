@@ -12,7 +12,12 @@ import {
 } from '@/components/ui/card'
 import { ApiError } from '@/lib/api-client'
 import { getEncounter } from '@/lib/encounters'
-import { createEncounterNote, listEncounterNotes } from '@/lib/notes'
+import {
+  createEncounterNote,
+  listEncounterNotes,
+  signEncounterNote,
+  type EncounterNote,
+} from '@/lib/notes'
 import { useAuth } from '@/providers/AuthProvider'
 
 /**
@@ -103,6 +108,47 @@ export function EncounterDetailPage(): React.JSX.Element {
 
   const canSave =
     noteDraft.trim().length > 0 && !saveMutation.isPending
+
+  // --- Note signing (Phase 4D.5) ---
+
+  const [signError, setSignError] = useState<string | null>(null)
+  const [signingNoteId, setSigningNoteId] = useState<string | null>(null)
+  const signMutation = useMutation({
+    mutationFn: (noteId: string) =>
+      signEncounterNote({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+        noteId,
+      }),
+    onSuccess: () => {
+      setSignError(null)
+      setSigningNoteId(null)
+      queryClient.invalidateQueries({
+        queryKey: ['notes', slug, encounterId],
+      })
+    },
+    onError: (err) => {
+      setSigningNoteId(null)
+      if (err instanceof ApiError && err.status === 403) {
+        setSignError('You do not have authority to sign notes on this tenant.')
+      } else if (err instanceof ApiError && err.status === 409) {
+        // Someone else signed, or the list is stale. Refetch to
+        // reconcile and show a brief banner.
+        setSignError('This note was already signed.')
+        queryClient.invalidateQueries({
+          queryKey: ['notes', slug, encounterId],
+        })
+      } else {
+        setSignError('Could not sign note. Try again.')
+      }
+    },
+  })
+
+  function onSignNote(noteId: string): void {
+    setSignError(null)
+    setSigningNoteId(noteId)
+    signMutation.mutate(noteId)
+  }
 
   const notFound = query.isError && isNotFound(query.error)
   const encounter = query.data
@@ -268,23 +314,27 @@ export function EncounterDetailPage(): React.JSX.Element {
                     No notes yet.
                   </p>
                 )}
+                {signError !== null && (
+                  <p
+                    role="alert"
+                    className="text-destructive text-xs"
+                    data-testid="sign-note-error"
+                  >
+                    {signError}
+                  </p>
+                )}
                 {notesQuery.data && notesQuery.data.items.length > 0 && (
                   <ul
                     className="flex flex-col gap-3"
                     data-testid="notes-list"
                   >
                     {notesQuery.data.items.map((n) => (
-                      <li
+                      <NoteRow
                         key={n.id}
-                        className="rounded-md border p-3"
-                      >
-                        <p className="text-muted-foreground mb-1 text-xs">
-                          <span className="font-mono">{n.createdAt}</span> ·
-                          author{' '}
-                          <span className="font-mono">{n.createdBy}</span>
-                        </p>
-                        <p className="whitespace-pre-wrap text-sm">{n.body}</p>
-                      </li>
+                        note={n}
+                        onSign={onSignNote}
+                        pendingSignNoteId={signingNoteId}
+                      />
                     ))}
                   </ul>
                 )}
@@ -294,6 +344,71 @@ export function EncounterDetailPage(): React.JSX.Element {
         )}
       </div>
     </div>
+  )
+}
+
+function NoteRow({
+  note,
+  onSign,
+  pendingSignNoteId,
+}: {
+  note: EncounterNote
+  onSign: (noteId: string) => void
+  pendingSignNoteId: string | null
+}): React.JSX.Element {
+  const status = note.status ?? 'DRAFT'
+  const isSigned = status === 'SIGNED'
+  const isPending = pendingSignNoteId === note.id
+  return (
+    <li
+      className={
+        isSigned
+          ? 'border-primary/40 bg-primary/5 rounded-md border p-3'
+          : 'rounded-md border p-3'
+      }
+      data-testid="note-row"
+      data-note-status={status}
+    >
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={
+              isSigned
+                ? 'bg-primary/15 text-primary rounded-full px-2 py-0.5 text-xs font-semibold'
+                : 'bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-semibold'
+            }
+            data-testid="note-status-badge"
+          >
+            {isSigned ? 'Signed' : 'Draft'}
+          </span>
+          <span className="text-muted-foreground text-xs">
+            <span className="font-mono">{note.createdAt}</span> · author{' '}
+            <span className="font-mono">{note.createdBy}</span>
+          </span>
+        </div>
+        {!isSigned && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onSign(note.id)}
+            disabled={isPending}
+            data-testid="sign-note-button"
+          >
+            {isPending ? 'Signing…' : 'Sign'}
+          </Button>
+        )}
+      </div>
+      {isSigned && (
+        <p
+          className="text-muted-foreground mb-1 text-xs"
+          data-testid="note-signed-attribution"
+        >
+          Signed on <span className="font-mono">{note.signedAt}</span> by{' '}
+          <span className="font-mono">{note.signedBy}</span>
+        </p>
+      )}
+      <p className="whitespace-pre-wrap text-sm">{note.body}</p>
+    </li>
   )
 }
 

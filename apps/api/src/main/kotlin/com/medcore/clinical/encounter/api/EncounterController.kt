@@ -12,6 +12,8 @@ import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.CreateEncounterNoteHandler
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
 import com.medcore.clinical.encounter.write.EncounterSnapshot
+import com.medcore.clinical.encounter.write.SignEncounterNoteCommand
+import com.medcore.clinical.encounter.write.SignEncounterNoteHandler
 import com.medcore.clinical.encounter.write.StartEncounterCommand
 import com.medcore.clinical.encounter.write.StartEncounterHandler
 import com.medcore.platform.api.ApiResponse
@@ -84,6 +86,10 @@ class EncounterController(
     private val listEncounterNotesGate:
         ReadGate<ListEncounterNotesCommand, ListEncounterNotesResult>,
     private val listEncounterNotesHandler: ListEncounterNotesHandler,
+    // --- 4D.5 note signing ---
+    private val signEncounterNoteGate:
+        WriteGate<SignEncounterNoteCommand, EncounterNoteSnapshot>,
+    private val signEncounterNoteHandler: SignEncounterNoteHandler,
 ) {
 
     /**
@@ -238,5 +244,51 @@ class EncounterController(
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
         return ResponseEntity.ok(responseBody)
+    }
+
+    // ========================================================================
+    // Phase 4D.5 — note signing
+    // ========================================================================
+
+    /**
+     * Sign a note (Phase 4D.5). Transitions the note from DRAFT
+     * to SIGNED once and only once; once signed, the body is
+     * immutable (trigger-enforced in V20). Emits
+     * `CLINICAL_ENCOUNTER_NOTE_SIGNED` on 200. Re-signing
+     * an already-signed note returns 409 `resource.conflict`
+     * with `details.reason: note_already_signed`. Requires
+     * `NOTE_SIGN` (OWNER + ADMIN).
+     *
+     * Action-style URL (`/sign`) follows HL7 FHIR convention for
+     * state-transition operations. No request body — the signer's
+     * identity comes from the authenticated principal.
+     */
+    @PostMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/notes/{noteId}/sign",
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun signEncounterNote(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+        @PathVariable noteId: UUID,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<ApiResponse<EncounterNoteResponse>> {
+        val command = SignEncounterNoteCommand(
+            slug = slug,
+            encounterId = encounterId,
+            noteId = noteId,
+        )
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = signEncounterNoteGate.apply(command, context) { cmd ->
+            signEncounterNoteHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterNoteResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.ok()
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
     }
 }

@@ -478,6 +478,43 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED("clinical.encounter.note.list_accessed"),
 
+    // --- Phase 4D.5: encounter note signing ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes/{noteId}/sign`
+     * when an OWNER/ADMIN signs a draft note (Phase 4D.5). The
+     * row transitions `status: DRAFT → SIGNED` and gains
+     * `signed_at` + `signed_by` atomically inside the WriteGate
+     * transaction.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.SignEncounterNoteAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId (also written to
+     *                       `encounter_note.signed_by`)
+     *   - `tenant_id`     = parent encounter's tenant UUID
+     *   - `resource_type` = `"clinical.encounter.note"`
+     *   - `resource_id`   = signed note UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.note.sign"`
+     *
+     * **No PHI in the reason slug.** Note body is PHI and never
+     * appears in the audit row. Forensic linkage to the specific
+     * note goes through `resource_id` → the RLS-gated
+     * `clinical.encounter_note` SELECT path.
+     *
+     * **No no-op suppression.** Signing is a one-shot state
+     * transition; attempting to re-sign an already-signed note
+     * returns 409 and emits an `AUTHZ_WRITE_DENIED` denial row
+     * via the standard gate path (not this action).
+     *
+     * **Immutability.** Once emitted, the signed note's `body`
+     * cannot change — enforced in Kotlin (the handler refuses)
+     * AND in SQL (V20 trigger
+     * `tr_clinical_encounter_note_immutable_once_signed`).
+     */
+    CLINICAL_ENCOUNTER_NOTE_SIGNED("clinical.encounter.note.signed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

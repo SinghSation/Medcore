@@ -29,6 +29,7 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.ENCOUNTER_WRITE,
                 MedcoreAuthority.NOTE_READ,
                 MedcoreAuthority.NOTE_WRITE,
+                MedcoreAuthority.NOTE_SIGN,
             )
     }
 
@@ -47,6 +48,11 @@ class MembershipRoleAuthoritiesTest {
         // slice; until then, tenant admins manage patient data.
         assertThat(admin).contains(MedcoreAuthority.PATIENT_CREATE)
         assertThat(admin).contains(MedcoreAuthority.PATIENT_UPDATE)
+        // Both OWNER and ADMIN hold NOTE_SIGN (Phase 4D.5). A
+        // future clinical-role slice may split this further
+        // (e.g., only clinician-attested roles can sign); until
+        // then, both tenant-admin roles can sign notes.
+        assertThat(admin).contains(MedcoreAuthority.NOTE_SIGN)
     }
 
     @Test
@@ -65,12 +71,13 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.NOTE_READ,
             )
         // Explicitly confirm MEMBER cannot mutate patient, encounter,
-        // or note records.
+        // or note records — including signing notes (Phase 4D.5).
         val member = MembershipRoleAuthorities.forRole(MembershipRole.MEMBER)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_CREATE)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_UPDATE)
         assertThat(member).doesNotContain(MedcoreAuthority.ENCOUNTER_WRITE)
         assertThat(member).doesNotContain(MedcoreAuthority.NOTE_WRITE)
+        assertThat(member).doesNotContain(MedcoreAuthority.NOTE_SIGN)
     }
 
     @Test
