@@ -1,26 +1,35 @@
-# CI/CD Runbook — Phase 3I.2
+# CI/CD Runbook
 
-This runbook describes the CI gates landed in Phase 3I.2 and the
-branch-protection configuration that enforces them. CI itself is
-defined declaratively in `.github/workflows/ci.yml`; this document
-covers operator-facing concerns (how to interpret failures, how to
-configure GitHub to require these gates).
+This runbook describes the CI gates wired in
+`.github/workflows/ci.yml` and the branch-protection configuration
+that enforces them. CI itself is defined declaratively; this
+document covers operator-facing concerns (how to interpret
+failures, how to configure GitHub to require these gates).
+
+Originally landed in Phase 3I.2 (backend + governance + secret
+scanning). Extended in VS1 Chunk G (Phase 4D.4) with the `web`
+and `e2e` gates so the DoD + PHI-leakage discipline proved
+locally in Chunk F is enforced at merge time, not by developer
+memory.
 
 ---
 
 ## 1. Gate overview
 
-Every PR against `main` and every push to `main` triggers three
-parallel jobs:
+Every PR against `main` and every push to `main` triggers five
+jobs:
 
-| Job | Runtime | Fails when |
+| Job | Runtime (est.) | Fails when |
 |---|---|---|
 | **test** | ~3–5 min | `./gradlew test` in `apps/api` fails (compile error, unit-test failure, integration-test failure, ArchUnit violation, Flyway migration checksum mismatch) |
+| **web** | ~1–2 min | `pnpm typecheck`, Vitest, or `pnpm build` in `apps/web` fails |
+| **e2e** | ~3–5 min | Playwright happy-path DoD fails OR the PHI-leakage scan finds any sentinel in `localStorage` / `sessionStorage` / `document.cookie` / `console.*`. Requires `test` + `web` to pass first (no sense spinning up Postgres + API + Vite when a PR already fails cheaper gates). |
 | **governance** | ~10 sec | Any commit in the PR range lacks a non-empty `Roadmap-Phase:` trailer OR `docs/product/*.md` has a passed `next_review:` without a `Review-Deferred:<reason>` trailer in the PR |
 | **secret-scan** | ~20 sec | Gitleaks detects any known secret pattern in the working tree or git history |
 
-All three jobs run in parallel — a PR that fails fast on one
-gate still reports the other two for the contributor.
+`test`, `web`, `governance`, `secret-scan` run in parallel. `e2e`
+runs after `test` + `web` have passed. A PR that fails fast on one
+gate still reports the others to the contributor.
 
 ---
 
@@ -48,7 +57,80 @@ gate still reports the other two for the contributor.
   by editing an already-applied migration. `V*` files are
   immutable once landed; create a new `V(N+1)` migration.
 
-### 2.2 `governance` job
+### 2.2 `web` job
+
+**Symptom 1:** "Typecheck" step fails.
+
+Run `pnpm typecheck` locally from `apps/web` — the error list
+will match CI. Common causes:
+
+- Unused export removed while a caller still imports it
+  (`noUnusedLocals` + dead import).
+- E2E fixture imports that drift from the source module they
+  reference (`tsconfig.e2e.json` participates in typecheck too).
+
+**Symptom 2:** "Vitest" step fails.
+
+Run `pnpm test` locally. `apps/web/vite.config.ts` scopes Vitest
+to `src/**/*.test.ts[x]` and explicitly excludes `e2e/` — a
+failure here is a unit- or component-level regression, not an E2E
+issue.
+
+**Symptom 3:** "Build" step fails.
+
+Run `pnpm build` locally. Usually a stricter-than-vitest
+TypeScript check (the build runs `tsc -b`) or a Tailwind / asset
+resolution error.
+
+### 2.3 `e2e` job
+
+**Symptom 1:** "Wait for API health" or "Wait for Vite" times out.
+
+The in-job wait loops poll `/actuator/health` and `/` for up to
+120 / 60 seconds respectively. When they time out, the artifact
+`service-logs` (uploaded on failure) contains the full API +
+Vite stdout/stderr. Common causes:
+
+- Flyway migration checksum drift — look for
+  `FlywayValidateException` in `api.log`.
+- Postgres service container not ready before the API tried to
+  connect — the service container has a `pg_isready` health
+  check with 10 retries; if Postgres genuinely takes longer
+  than ~50 s to start on the runner, escalate to a repo issue.
+- `medcore_app` password sync failure — check for
+  `MedcoreAppPasswordSync` log lines. The CI env sets
+  `MEDCORE_DB_APP_PASSWORD_SYNC_ENABLED=true`; the sync runs
+  `ALTER ROLE medcore_app WITH PASSWORD ...` after Flyway.
+  If the role doesn't exist yet, the migration that creates it
+  (`V10__runtime_role_grants.sql` in identity) failed to apply.
+
+**Symptom 2:** Playwright reports one or more failing specs.
+
+Download the `playwright-report` artifact — the HTML report
+includes per-test traces, screenshots, and the exact assertion
+that failed. `playwright-test-results` contains the raw trace
+ZIP files which you can open with
+`pnpm exec playwright show-trace <trace.zip>` locally for
+step-by-step replay.
+
+**Symptom 3:** The PHI-leakage spec fails.
+
+The assertion message names the specific sentinel that leaked
+(patient given name / family name / MRN / birth date / note
+body / bearer-token string) and the surface it appeared in
+(storage / cookie / console). This is a **merge-blocker** — PHI
+in browser storage, cookies, or console violates HIPAA §164.312
+technical safeguards. Do NOT bypass; fix at the source.
+
+**Symptom 4:** The DoD assertion fails (> 3 clicks or > 90 s).
+
+Roadmap exits under Phase 4C and 4D commit Medcore to specific
+user-facing bounds. A regression here isn't a flake — it's a
+product-surface contract violation. Fix the regression; do NOT
+weaken the bound without an explicit ADR and user-facing
+stakeholder signoff.
+
+### 2.4 `governance` job
 
 **Symptom 1:** "Check Roadmap-Phase trailer" step lists commits
 without the trailer.
@@ -82,7 +164,7 @@ in the past. Remediation (pick one):
    are rejected by the check (ADR-005 §2.5 refinement —
    deferrals must be reviewable in git history).
 
-### 2.3 `secret-scan` job
+### 2.5 `secret-scan` job
 
 **Symptom:** "Run gitleaks" step reports one or more findings.
 
@@ -130,16 +212,20 @@ first PR using the new workflow lands:
 6. Check **Require branches to be up to date before merging**
 7. In the status-check search box, add each of:
    - `test (gradle + ArchUnit + migrations)`
+   - `web (pnpm typecheck + test + build)`
+   - `e2e (Playwright live stack)`
    - `governance (trailer + doc-staleness)`
    - `secret-scan (gitleaks)`
    (If the names don't appear, trigger the workflow once by
    pushing a dummy commit or opening a draft PR — the names
-   populate after the first run.)
+   populate after the first run. `e2e` only runs after `test`
+   and `web` pass, so it may take two workflow cycles for its
+   name to surface.)
 8. Optional but recommended: **Require linear history** (forces
    rebase / squash-merge; simpler `git log --oneline` on main)
 9. Save the rule.
 
-After save, PRs that fail any of the three jobs are blocked from
+After save, PRs that fail any of the five jobs are blocked from
 merging in the GitHub UI. The only bypass is a repo admin
 pressing "merge anyway" with a documented override — that
 bypass should be logged in the PR body.
@@ -170,17 +256,30 @@ apply (ADR-004):
 
 GitHub Actions is free for public repos; for private repos,
 `ubuntu-latest` consumes standard compute minutes. Current
-footprint per PR (observed, not projected):
+footprint per PR (estimated):
 
 - test job: ~3–5 min (dominated by Testcontainers spin-up +
   integration tests)
+- web job: ~1–2 min (pnpm install + typecheck + Vitest + build)
+- e2e job: ~3–5 min (pnpm install + Playwright browser + API
+  bootJar + service warm-up + 2 specs). Runs sequentially after
+  `test` + `web` — total wall-clock cost is ~test + ~e2e.
 - governance job: ~10 sec (git log iteration + Python)
 - secret-scan job: ~20 sec (gitleaks binary download + scan)
 
-**Caching:** `gradle/actions/setup-gradle@v4` caches Gradle
-wrapper + dependencies between runs. First run on a fresh
-dependency tree takes ~2 min longer; subsequent runs see the
-cache. ArchUnit + Testcontainers artifacts are also cached.
+**Caching:**
+
+- `gradle/actions/setup-gradle@v4` caches Gradle wrapper +
+  dependencies. First run on a fresh dependency tree takes
+  ~2 min longer; subsequent runs see the cache. ArchUnit +
+  Testcontainers artifacts also cached.
+- `actions/setup-node@v4` with `cache: 'pnpm'` caches the pnpm
+  store between runs. Invalidated by `pnpm-lock.yaml` hash
+  change.
+- `actions/cache@v4` on `~/.cache/ms-playwright` caches the
+  Chromium headless-shell binary (~90 MB). Invalidated by
+  `pnpm-lock.yaml` hash change (catches Playwright version
+  bumps via devDep updates).
 
 **Concurrency:** no concurrency limits set — each PR push runs
 a fresh workflow. If cost becomes a concern, add:
@@ -226,7 +325,19 @@ Phase 3I.2 ships the core governance gates. Planned additions:
 - **3I.6** — Deploy-on-merge workflow (ECR push + ECS service
   update + Flyway migrator pre-deploy task).
 
-Frontend gates (`pnpm typecheck`, `pnpm test`) land alongside
-Phase 3L (UX foundation) when `apps/web` has meaningful code.
+Frontend `web` + `e2e` gates landed in VS1 Chunk G (Phase 4D.4)
+— see VS1 evidence pack at `docs/evidence/vs1-review-pack.md`.
 
-*Last reviewed: 2026-04-23 (Phase 3I.2 landing).*
+Still pending:
+
+- **Dependabot / Renovate** policy for pnpm + gradle — separate
+  governance slice.
+- **Firefox + WebKit matrix** on the `e2e` job — post-VS1
+  browser-hardening slice.
+- **Lighthouse CI / Playwright performance budgets** — post-VS1.
+- **CODEOWNERS + required-reviewer matrix** — separate
+  governance slice.
+- **Flake dashboard / historical trend** — later observability
+  slice.
+
+*Last reviewed: 2026-04-24 (VS1 Chunk G landing).*

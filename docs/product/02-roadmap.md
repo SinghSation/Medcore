@@ -1,6 +1,6 @@
 ---
 status: Active
-last_reviewed: 2026-04-23
+last_reviewed: 2026-04-24
 next_review: 2026-07-25
 cadence: living-per-slice
 owner: Repository owner
@@ -408,7 +408,7 @@ merge/duplicate, address history.
 
 ---
 
-## Phase 4C — Encounter shell *(queued)*
+## Phase 4C — Encounter shell *(VS1 slice landed; full exit queued)*
 
 **Goal:** Encounter lifecycle. Status machine. Provider attribution.
 
@@ -416,14 +416,26 @@ merge/duplicate, address history.
 
 **Entry:** 4B landed.
 
-**Exit:**
-- `encounter` module: states (planned → in-progress → finished →
-  cancelled / entered-in-error). State transitions are audited.
-- Attribution: primary provider, other participants.
-- Linkage to patient, appointment (if any), location.
+**VS1 slice landed (2026-04-23..24):**
+- 4C.1 (`75e6ac2`) — V18 encounter schema, Start + Get write stacks,
+  `ENCOUNTER_*` authorities, audit actions.
+- 4C.2 (`b1ff0c3`) — Start-encounter button on patient detail +
+  minimal encounter detail page.
+- DoD asserted end-to-end by `apps/web/e2e/vs1-happy-path.spec.ts`
+  (≤ 3 clicks) — see `docs/evidence/vs1-dod-measurement.md`.
+
+**Still required for phase full exit:**
+- State machine transitions (PLANNED / FINISHED / CANCELLED /
+  entered-in-error) + audited transitions — VS1 ships IN_PROGRESS
+  only.
+- Attribution: primary provider + other participants.
+- Linkage to appointment + location (not just patient).
 - FHIR `Encounter` read endpoint.
-- Start-encounter workflow meets DoD: **≤ 3 clicks** from today's
-  schedule view to encounter started.
+- Per-patient encounter list UI + "resume open encounter" UX
+  (VS1 always mints a new encounter).
+- ≤ 3-click DoD measured from a "today's schedule" surface
+  (VS1 measures from the patient-list landing as the nearest
+  analogue; the schedule surface is its own slice).
 
 **Dependencies:** 4B.
 
@@ -433,7 +445,7 @@ merge/duplicate, address history.
 
 ---
 
-## Phase 4D — Clinical notes *(queued)*
+## Phase 4D — Clinical notes *(VS1 slice landed; full exit queued)*
 
 **Goal:** Structured + free-text clinical documentation. Signing.
 Amendments (versioned, never mutated).
@@ -441,6 +453,33 @@ Amendments (versioned, never mutated).
 **Tier default:** Tier 3 (PHI).
 
 **Entry:** 4C landed.
+
+**VS1 slice landed (2026-04-23..24):**
+- 4D.1 (`c45e16a`) — V19 encounter-note schema, create + list
+  write/read stacks, `NOTE_*` authorities, audit actions,
+  PHI-not-in-reason discipline.
+- 4D.2 (`13007d9`) — Note editor + list on encounter detail
+  page, 403 banner, empty state, `data-phi` tagging.
+- 4D.3 (`1dc34ef`) — Playwright DoD spec + frontend PHI-leakage
+  scan. Median 158 ms / 3 clicks on 5 runs (≈ 570× under the
+  90 s ceiling). Full evidence at
+  `docs/evidence/vs1-dod-measurement.md`.
+- 4D.4 (VS1 Chunk G) — CI enforcement of the DoD + PHI scan so
+  future regressions are caught at merge time.
+
+**Still required for phase full exit:**
+- Note templates (SOAP, H&P, progress note, procedure note).
+- Structured sections: subjective / objective / assessment /
+  plan / ROS / PE / HPI — structured where a FHIR mapping
+  exists, free-text otherwise.
+- Sign flow: signed notes are immutable; amendments are new
+  records linked to the original with an `amends` reference.
+- FHIR `DocumentReference` surface (via 5A).
+- Sign-note workflow DoD: **≤ 1 click** from ready-to-sign
+  state to signed.
+- The ≤ 90 s DoD re-measured against the full structured-note
+  surface (VS1's measurement is on the thin free-text surface;
+  the bound tightens as templates / signing / validation land).
 
 **Exit:**
 - `clinicaldocs` module: note entity, note-template entity,

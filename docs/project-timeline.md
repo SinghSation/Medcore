@@ -27,9 +27,36 @@
 | Governance | 2026-04-21 | `14dfc84` | ADR-004 — tiered execution authority model | 4 / +775 / −174 |
 | 3D | 2026-04-21 | `24e5e43` | RLS substrate + Audit v2 chain | 13 / +1,716 / −73 |
 | 3E | 2026-04-21 | `e690275` | Runtime datasource role switch + verify-only password | 19 / +994 / −25 |
+| 3F (rolled up) | 2026-04-21..22 | `3da3ff8`..`217eece` | Observability spine — request-id + MDC + actuator + error envelope + OTLP + audit chain verify | (rolled up) |
+| 3H | 2026-04-22 | `ce82724` | Secrets + production-posture substrate | (rolled up) |
+| 3J (rolled up) | 2026-04-22 | `04ff076`..`a401e50` | WriteGate substrate + tenancy writes + RBAC + membership invite + role update + revoke | (rolled up) |
+| 3I.1 / 3I.2 | 2026-04-22..23 | `30241ca` / `3d85d05` | ArchUnit dependency rules + CI gates (test + governance + secret-scan) | (rolled up) |
+| 3K.1 | 2026-04-23 | `3613c1f` | ClaimsNormalizer + WorkOS broker posture (ADR-008) | (rolled up) |
+| 4A.0 | 2026-04-23 | `0b865ee` | PHI RLS substrate (prerequisite for clinical) | (rolled up) |
+| 4A.1..4A.5 (rolled up) | 2026-04-23 | `c579f5f`..`7b5a4f6` | Patient schema + writes + identifiers + read + FHIR R4 shape | (rolled up) |
+| Stabilization | 2026-04-23 | `bde9ab3` | Wire `@Primary` + `@FlywayDataSource` DataSource pair | (rolled up) |
+| **VS1 Chunk A** | 2026-04-23 | `6857759` | Frontend scaffolding + demo login | 29 / +1,841 / −424 |
+| 4B.1 | 2026-04-23 | `5ce4e7d` | List patients endpoint + `CLINICAL_PATIENT_LIST_ACCESSED` audit | 14 / +1,590 / −16 |
+| **VS1 Chunk B** | 2026-04-23 | `d1e381f` | Patient list page wired to tenant home | 6 / +545 / −13 |
+| Governance | 2026-04-23 | `da414b3` + `12ee0c5` + `6d12995` | Rule 07 + §3.7 naming rule pointer + Chunks A/B tier-skip incident note + runbook pin | (rolled up) |
+| **VS1 Chunk C** | 2026-04-23 | `28a6817` | Patient detail page + `data-phi` container tagging | 6 / +643 / −4 |
+| **VS1 Chunk D (backend)** | 2026-04-23 | `75e6ac2` | Encounter shell — V18 schema + start + get + `ENCOUNTER_*` authorities (4C.1) | 25 / +1,904 / −3 |
+| **VS1 Chunk D (frontend)** | 2026-04-23 | `b1ff0c3` | Start-encounter button + encounter detail page (4C.2) | 6 / +561 / −1 |
+| **VS1 Chunk E (backend)** | 2026-04-23 | `c45e16a` | Encounter notes — V19 schema + create + list + `NOTE_*` authorities (4D.1) | 27 / +2,092 / −6 |
+| **VS1 Chunk E (frontend)** | 2026-04-23 | `13007d9` | Note editor + list on encounter detail page (4D.2) | 4 / +541 / −29 |
+| **VS1 Chunk F** | 2026-04-24 | `1dc34ef` | Playwright E2E + DoD + PHI leakage scan (4D.3) | 14 / +985 / −2 |
+| **VS1 Chunk G** | 2026-04-24 | (this commit) | CI `web` + `e2e` jobs + VS1 close-out governance (4D.4) | (this commit) |
 
-Total committed: **14 commits**, all on `main`, all pushed to `origin/main`.
-Total tests on the published baseline (`e690275`): **74/74**.
+Total committed through VS1 Chunk F: **50 commits**, all on `main`,
+all pushed to `origin/main`. VS1 Chunk G lands with this slice.
+
+> **Narrative gap note.** Phases 3F through 4B.1 are captured in
+> the "At a glance" table above as rolled-up rows. Per-phase
+> narrative sections (matching the detailed treatment Phases 0–3E
+> received) were skipped during landing; backfilling them is a
+> tracked carry-forward. The commit history on `main` is the
+> canonical record for those phases; the review pack at
+> `docs/evidence/vs1-review-pack.md` covers VS1 itself in detail.
 
 ---
 
@@ -339,24 +366,183 @@ Codified in ADR-004 §2.4. Every commit body lists deferred items; each subseque
 
 ---
 
-## Open carry-forward (as of `e690275`)
+## VS1 — First clinician vertical slice (2026-04-23..24)
 
-Items still deferred — every commit body since 3C has carried this list forward:
+### What VS1 is
 
-- **Move Flyway out-of-process for production** (3E; unresolved residual at landing) — eliminates the remaining case where the JVM holds migrator credentials in memory. Tracked to Phase 3F/3H.
+The first slice across all layers — auth → tenancy → PHI RLS →
+write gate → audit → read gate → UI — that executes a complete
+clinician workflow: **login → patient → start encounter → write
+note → save**. VS1 is not a phase; it's a milestone that draws a
+thin line through Phases 3K, 4A, 4B, 4C, 4D, and 4D.3/4D.4 to
+prove end-to-end the plumbing works together under real browser
+conditions.
+
+The full review pack — commits, evidence files, gates, and
+carry-forwards — lives at `docs/evidence/vs1-review-pack.md`.
+This section is the chronological narrative.
+
+### Chunk A — Frontend scaffolding + demo login (`6857759`)
+
+React 19 + Vite 6 + TypeScript strict + Tailwind v4 + shadcn/ui
++ TanStack Query v5. Paste-token `/login` page, in-memory token
+store (no `localStorage` / `sessionStorage` — PHI discipline),
+minimal tenant list at `/`. First end-to-end auth surface in the
+browser. Landed under looser discipline than later chunks (see
+§3.7 pointer in AGENTS.md); the governance incident note at
+`docs/evidence/incident-2026-04-23-chunk-a-b-tier-trailer-skip.md`
+records the disposition.
+
+### Chunk B — Patient list (`d1e381f` frontend; `5ce4e7d` backend)
+
+First PHI-render surface in the browser. Backend added the list
+endpoint with paging + `CLINICAL_PATIENT_LIST_ACCESSED` audit
+including empty-list calls; frontend wired the table with
+MRN-link navigation. Same looser-discipline window as Chunk A.
+
+### Governance remediation (`da414b3` + `12ee0c5` + `6d12995`)
+
+Mid-slice discovery: Chunks A and B shipped without `Tier:`,
+`Roadmap-Phase:`, or carry-forward trailers. Remediation
+landed as **Option B-light** — forward controls installed; prior
+commits NOT rewritten. Ships AGENTS.md §3.7 pointer to Rule 07,
+the Rule 07 naming-conventions rule itself, and the incident
+note. Runbook pinned stable subject + post-1900 birth dates.
+
+### Chunk C — Patient detail (`28a6817`)
+
+Patient demographics + identifier list on `data-phi`-tagged
+container. First use of `data-phi` as the frontend PHI boundary
+convention that Chunks D / E / F all extend.
+
+### Chunk D — Encounter start (`75e6ac2` + `b1ff0c3`)
+
+Backend (4C.1): V18 `clinical.encounter`, `StartEncounter` +
+`GetEncounter` stacks, new `ENCOUNTER_*` authorities, two new
+audit actions. Frontend (4C.2): Start-encounter button on patient
+detail + minimal encounter detail page. First clinical write that
+is not a patient-demographic write.
+
+### Chunk E — Encounter notes (`c45e16a` + `13007d9`)
+
+Backend (4D.1): V19 `clinical.encounter_note`, append-only
+create + list stacks, new `NOTE_*` authorities, two new audit
+actions. Reason slugs carry `count:N` on list and NO body /
+length / hash on create — strict PHI discipline. Frontend (4D.2):
+note editor + list on encounter detail page with `data-phi` at
+the card root, clear-on-save, newest-first list, 403 banner.
+
+### Chunk F — Playwright + DoD + PHI-leakage scan (`1dc34ef`)
+
+First automated proof the VS1 loop works end-to-end and that the
+PHI-discipline claims hold. Ships `@playwright/test` + Chromium,
+an admin-DS seeder, and two specs (happy-path + PHI-leakage).
+Measured on 5 consecutive runs: 3 clicks median, 158 ms median
+to note-saved, 0 PHI sentinels in storage / cookies / console.
+Evidence: `docs/evidence/vs1-dod-measurement.md`.
+
+### Chunk G — CI + VS1 close-out governance (this commit, 4D.4)
+
+This slice. Two new CI jobs (`web` + `e2e`) so the DoD + PHI
+discipline Chunk F proved locally is enforced at merge time.
+Runbook updates, roadmap markers for the landed VS1 portions
+of Phases 4C and 4D, this timeline entry, and a VS1 review pack.
+Branch-protection toggle is a manual operator action (called out
+in `docs/runbooks/ci-cd.md` §3).
+
+### Cross-cutting themes from VS1
+
+- **`data-phi` as the frontend PHI boundary** (Chunks C, D, E).
+  One tag at the card root rather than per-field. Makes the
+  PHI-leakage spec scan a single surface per card.
+- **Role expansion pattern** (Chunks D, E). Every new clinical
+  surface extends `MedcoreAuthority` + `MembershipRoleAuthorities`
+  + `MembershipRoleAuthoritiesTest` in the same commit. Zero
+  room to forget to grant a role.
+- **Closed-enum audit reason slugs with no PHI** (Chunks D, E).
+  Reasons like `intent:clinical.encounter.note.list|count:N`
+  are testable + forensic without carrying PHI. Every new
+  clinical write adds its slug family to `AuditAction`.
+- **PHI-not-in-reason as a test assertion** (Chunks D, E). Every
+  clinical write ships a test that greps stdout + audit rows for
+  distinctive body text and asserts zero hits.
+- **Audit rows are never deleted** (Chunks E test cleanup, F
+  seeder). Test cleanup deletes encounters + notes + patients
+  but preserves `audit.audit_event` per ADR-003.
+- **Vertical-slice sequencing over horizontal polish** (all
+  chunks). UI is deliberately bare shadcn defaults; design-system
+  work is explicitly deferred to a later phase so plumbing gets
+  proven first. The Chunk G evidence doc documents the ≈ 570×
+  safety margin on the 90 s DoD — that margin is a sequencing
+  artifact, not a sign the DoD is wrong.
+
+---
+
+## Open carry-forward (as of VS1 Chunk G)
+
+Items still deferred — every commit body since 3C has carried
+its slice-specific list forward. Below is the consolidated state
+as VS1 closes.
+
+### Platform (from 3A..3E)
+- **Move Flyway out-of-process for production** (3E) — the JVM
+  still briefly holds migrator credentials in memory. Tracked.
 - **Password rotation as a first-class flow** (3E).
 - **`medcore_migrator` as a distinct provisioned production role** (3E).
-- **Per-tenant chain sharding** (new in 3D) — single global chain at v2.
-- **Chain verification endpoint / scheduled job** (new in 3D) — `audit.verify_chain()` exists and is grant-available; no operator surface yet.
-- **RLS policies for tenancy write/admin surfaces** (3D) — covered when the admin slice lands.
+- **Per-tenant chain sharding** (3D) — single global chain at v2.
+- **Chain verification endpoint / scheduled job** (3D) — function
+  exists and is grant-available; no operator surface yet.
+- **RLS policies for tenancy write/admin surfaces** (3D) —
+  covered when the admin slice lands.
 - **Central request-ID generator** (3C).
 - **Proxy-aware `client_ip` extraction** (3C).
 - **Uniform 401 envelope** (3B.1).
-- **`TenantContextMissingException` HTTP mapping** (3B.1) — defensive infrastructure with no caller yet.
+- **`TenantContextMissingException` HTTP mapping** (3B.1).
 - **Concurrent first-login retry** (3A.3).
-- **Role → authority / policy-engine mapping** (3A.3).
-- **Generated `packages/api-client`** (3A.3).
-- **Production IdP ADR** (3A.3).
+
+### Clinical (from 4A..4D)
+- **Per-patient encounter list UI + resume-open-encounter UX** —
+  Phase 4C full exit.
+- **Encounter state transitions** (PLANNED / FINISHED /
+  CANCELLED / entered-in-error) — Phase 4C full exit.
+- **Provider attribution on encounters** — Phase 4C full exit.
+- **FHIR `Encounter` read endpoint** — Phase 4C full exit.
+- **Note signing workflow** (immutable-once-signed) — Phase 4D full exit.
+- **Note amendments** (`amends_id` FK, new row per amendment) — Phase 4D.
+- **Note templates** (SOAP / H&P / progress / procedure) — Phase 4D.
+- **Structured note sections** (subjective / objective / …) — Phase 4D.
+- **FHIR `DocumentReference` surface** — Phase 5A.
+- **Sign-note ≤ 1-click DoD** — Phase 4D full exit.
+
+### Frontend + UX (from VS1 A..G)
+- **Design-system phase** — tokens, typography scale, spacing
+  scale, icon set, density modes, dark mode, Storybook. VS1 runs
+  on bare shadcn defaults deliberately.
+- **A11y (axe) audit in E2E** — design-system phase.
+- **Visual regression** (Percy / Chromatic / Playwright snapshots) —
+  design-system phase.
+- **`packages/ui` extraction** — post-VS1.
+- **`packages/api-client` extraction** — post-VS1 (also 3A.3 residual).
+- **`packages/schemas`-driven types** — post-VS1.
+- **i18n + locale-aware date formatting** — post-VS1.
+- **Mobile / tablet viewports** — Phase 6C.
+- **Keyboard-first shortcut surface** (Ctrl/Cmd-Enter save etc.) — UX slice.
+
+### CI + enforcement (from VS1 Chunk G)
+- **Firefox + WebKit matrix** on `e2e` — post-VS1.
+- **Lighthouse CI / Playwright performance budgets** — post-VS1.
+- **Mutation testing** (Stryker etc.) — deferred.
+- **E2E sharding / parallel workers** — when runtime crosses 2 min.
+- **Flake dashboard / historical trend** — later observability slice.
+- **CODEOWNERS + required-reviewer matrix** — separate governance slice.
+- **Dependabot / Renovate policy** — separate governance slice.
+- **Deploy pipelines** — Phase 3H follow-on (3I.3..3I.6).
+- **DOM hidden-field + network-response-cache + service-worker
+  PHI scans** — dedicated PHI-hardening slice.
+- **Bundled login-to-landing workflow DoD** — separate
+  onboarding-DoD slice.
+- **`docs/project-timeline.md` per-phase narrative backfill for
+  Phases 3F..4B.1** — tracked as Tier 1 doc-only slice.
 
 ---
 
@@ -376,3 +562,4 @@ Items still deferred — every commit body since 3C has carried this list forwar
 This doc is append-only narrative. Factual state (commit SHA, status, counts) is corrected in place when a slice lands; narrative content is never rewritten. Each material update is recorded below.
 
 - **2026-04-21** — Phase 3E marked landed at `e690275`. Factual-state corrections applied to the at-a-glance table, totals, the Phase 3E heading, and the Status subsection. Carry-forward header retitled from "as of in-flight 3E" to "as of `e690275`". No narrative content modified.
+- **2026-04-24** — VS1 Chunk G landing. "At a glance" table extended with rolled-up rows for Phases 3F..4A.5 and one row per VS1 chunk. New `## VS1 — First clinician vertical slice` section added between the Phase 3E narrative and the Open carry-forward block. Carry-forward header retitled from "as of `e690275`" to "as of VS1 Chunk G" and reorganized into Platform / Clinical / Frontend+UX / CI categories. A tracked carry-forward captures the narrative gap for Phases 3F..4B.1 — the at-a-glance rows are accurate but per-phase narrative sections were skipped during landing and will backfill in a Tier 1 doc-only slice.

@@ -637,3 +637,38 @@ SQL
 A full `docker compose down --volumes` (§7) also wipes everything but
 nukes the whole Postgres cluster along with it — use only if the
 schema itself needs to be re-migrated.
+
+### 16.6 Running the E2E suite (VS1 Chunk F+)
+
+The Playwright E2E suite lives in `apps/web/e2e/` and is documented
+in `docs/evidence/vs1-dod-measurement.md`. It asserts the Phase 4C
+≤ 3-click and Phase 4D ≤ 90 s DoDs plus the PHI-leakage discipline
+(nothing PHI-ish in `localStorage` / `sessionStorage` / cookies /
+`console.*`).
+
+Prerequisites (same as manual demo flow above):
+
+1. Postgres container running — §3.
+2. Mock OAuth2 server running — `docker compose up -d mock-oauth2-server`.
+3. API running — `set -a && source .env && set +a && make api-dev`
+   in a separate terminal.
+4. Vite dev server running — `make web-dev` in a separate terminal.
+
+Then, from the repo root:
+
+```bash
+set -a && source .env && set +a
+make e2e           # headless; 2 specs; ~3s post-warmup
+make e2e-headed    # shows the browser window
+make e2e-ui        # interactive UI mode for debugging
+```
+
+The seeder (`apps/web/e2e/fixtures/seed.ts`) uses a dedicated
+tenant slug `e2e-test` that is disjoint from the manual demo
+seed above — running the E2E suite does NOT wipe the data you
+set up in §16.3. The seeder also preserves `audit.audit_event`
+rows (append-only per ADR-003) so the audit chain stays intact
+across E2E runs.
+
+CI runs the same suite automatically via the `e2e` job — see
+`docs/runbooks/ci-cd.md` §1.
