@@ -59,15 +59,24 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     ENCOUNTER_READ("MEDCORE_ENCOUNTER_READ"),
     ENCOUNTER_WRITE("MEDCORE_ENCOUNTER_WRITE"),
 
-    // --- Clinical-note authorities (Phase 4D.1, VS1 Chunk E) ---
-    // Role map (4D.1, documented simplification):
-    //   OWNER + ADMIN — NOTE_READ + NOTE_WRITE
+    // --- Clinical-note authorities (Phase 4D.1 + 4D.5) ---
+    // Role map:
+    //   OWNER + ADMIN — NOTE_READ + NOTE_WRITE + NOTE_SIGN
     //   MEMBER        — NOTE_READ only
-    // Signing, amendments, and any per-section write grants (e.g.,
-    // NOTE_SIGN, NOTE_AMEND) are Phase 4D follow-on slices and
-    // will split NOTE_WRITE further at that time.
+    //
+    // NOTE_SIGN is deliberately separate from NOTE_WRITE (4D.5):
+    // in real clinical role models, a trainee / nurse may write
+    // notes but only a physician may sign them. Splitting now
+    // keeps future clinical-role differentiation additive —
+    // renaming a shipped authority is a breaking security-contract
+    // change (Rule 07 forward-only). For MVP, both OWNER and
+    // ADMIN hold NOTE_SIGN; MEMBER does not.
+    //
+    // Amendments (NOTE_AMEND) remain a carry-forward and will
+    // split NOTE_WRITE further when the amendment workflow lands.
     NOTE_READ("MEDCORE_NOTE_READ"),
     NOTE_WRITE("MEDCORE_NOTE_WRITE"),
+    NOTE_SIGN("MEDCORE_NOTE_SIGN"),
 
     // --- System-scope (bootstrap, admin ops) ---
     /**

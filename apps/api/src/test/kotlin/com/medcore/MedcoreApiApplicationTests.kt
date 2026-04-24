@@ -87,6 +87,7 @@ class MedcoreApiApplicationTests {
                 Row("17", "V17__patient_identifier_role_gate.sql", true),
                 Row("18", "V18__clinical_encounter.sql", true),
                 Row("19", "V19__clinical_encounter_note.sql", true),
+                Row("20", "V20__clinical_encounter_note_signing.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

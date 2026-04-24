@@ -108,4 +108,21 @@ class EncounterWriteConfig {
             txManager = txManager,
             txHook = phiRlsTxHook,
         )
+
+    // --- Phase 4D.5: encounter note signing ---
+
+    @Bean
+    fun signEncounterNoteGate(
+        policy: SignEncounterNotePolicy,
+        auditor: SignEncounterNoteAuditor,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<SignEncounterNoteCommand, EncounterNoteSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = null,
+            txHook = phiRlsTxHook,
+        )
 }
