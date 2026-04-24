@@ -40,31 +40,6 @@ export function PatientDetailPage(): React.JSX.Element {
     navigate('/login', { replace: true })
   }
 
-  const [startError, setStartError] = useState<string | null>(null)
-  const startMutation = useMutation({
-    mutationFn: () =>
-      startEncounter({
-        tenantSlug: slug!,
-        patientId: patientId!,
-        encounterClass: 'AMB',
-      }),
-    onSuccess: (encounter) => {
-      navigate(`/tenants/${slug}/encounters/${encounter.id}`)
-    },
-    onError: (err) => {
-      setStartError(
-        err instanceof ApiError && err.status === 403
-          ? 'You do not have authority to start encounters on this tenant.'
-          : 'Could not start encounter. Try again.',
-      )
-    },
-  })
-
-  function onStartEncounter(): void {
-    setStartError(null)
-    startMutation.mutate()
-  }
-
   const encountersQuery = useQuery({
     queryKey: ['encounters', 'by-patient', slug, patientId],
     queryFn: ({ signal }) =>
@@ -80,6 +55,50 @@ export function PatientDetailPage(): React.JSX.Element {
     },
   })
 
+  // Phase 4C.4: at most one IN_PROGRESS encounter per (tenant,
+  // patient) is a DB invariant (V22's partial unique index). The
+  // list is already under V18 SELECT-RLS, so `.find` returns the
+  // caller-visible open encounter if any — undefined otherwise.
+  const openEncounter = encountersQuery.data?.items.find(
+    (e) => e.status === 'IN_PROGRESS',
+  )
+
+  const [startError, setStartError] = useState<string | null>(null)
+  const startMutation = useMutation({
+    mutationFn: () =>
+      startEncounter({
+        tenantSlug: slug!,
+        patientId: patientId!,
+        encounterClass: 'AMB',
+      }),
+    onSuccess: (encounter) => {
+      navigate(`/tenants/${slug}/encounters/${encounter.id}`)
+    },
+    onError: (err) => {
+      // Phase 4C.4: another tab / double-click raced us and an
+      // IN_PROGRESS encounter now exists. The 409 body carries
+      // `existingEncounterId` — redirect to it so the caller lands
+      // on the same route the "Resume" button would have taken.
+      if (err instanceof ApiError && err.status === 409) {
+        const existingId = extractExistingEncounterId(err)
+        if (existingId !== null) {
+          navigate(`/tenants/${slug}/encounters/${existingId}`)
+          return
+        }
+      }
+      setStartError(
+        err instanceof ApiError && err.status === 403
+          ? 'You do not have authority to start encounters on this tenant.'
+          : 'Could not start encounter. Try again.',
+      )
+    },
+  })
+
+  function onStartEncounter(): void {
+    setStartError(null)
+    startMutation.mutate()
+  }
+
   const notFound = query.isError && isNotFound(query.error)
   const patient = query.data
 
@@ -94,7 +113,16 @@ export function PatientDetailPage(): React.JSX.Element {
             </p>
           </div>
           <div className="flex gap-2">
-            {patient && (
+            {patient && openEncounter && (
+              <Button asChild data-testid="resume-encounter-button">
+                <Link
+                  to={`/tenants/${slug}/encounters/${openEncounter.id}`}
+                >
+                  Resume encounter
+                </Link>
+              </Button>
+            )}
+            {patient && !openEncounter && (
               <Button
                 onClick={onStartEncounter}
                 disabled={startMutation.isPending || startMutation.isSuccess}
@@ -409,6 +437,28 @@ function Row({
 
 function isNotFound(err: unknown): err is ApiError {
   return err instanceof ApiError && err.status === 404
+}
+
+/**
+ * Pull `details.existingEncounterId` out of a 4C.4 double-start
+ * 409 body. The API returns
+ *   { code: 'resource.conflict',
+ *     details: { reason: 'encounter_in_progress_exists',
+ *                existingEncounterId: '<uuid>' } }
+ * when V22's partial unique index fires on a concurrent Start.
+ * Returns null if the body doesn't carry the expected shape —
+ * caller falls back to the generic error surface.
+ */
+function extractExistingEncounterId(err: ApiError): string | null {
+  const body = err.body
+  if (typeof body !== 'object' || body === null) return null
+  const details = (body as { details?: unknown }).details
+  if (typeof details !== 'object' || details === null) return null
+  const reason = (details as { reason?: unknown }).reason
+  if (reason !== 'encounter_in_progress_exists') return null
+  const existingId = (details as { existingEncounterId?: unknown })
+    .existingEncounterId
+  return typeof existingId === 'string' ? existingId : null
 }
 
 // Unused type re-export so casual readers see the wire shape lives here.

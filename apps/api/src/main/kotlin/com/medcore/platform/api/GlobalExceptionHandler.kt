@@ -241,14 +241,21 @@ class GlobalExceptionHandler {
     @ExceptionHandler(WriteConflictException::class)
     fun onWriteConflict(
         ex: WriteConflictException,
-    ): ResponseEntity<ErrorResponse> =
-        ResponseEntity.status(HttpStatus.CONFLICT).body(
+    ): ResponseEntity<ErrorResponse> {
+        // Merge `reason` (always) + any structured details the
+        // handler attached (Phase 4C.4: `existingEncounterId` on
+        // double-start conflicts). Values are safe-to-wire
+        // primitives — the exception contract forbids PHI here.
+        val merged: MutableMap<String, Any> = linkedMapOf("reason" to ex.code)
+        ex.details?.forEach { (k, v) -> merged[k] = v }
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponses.of(
                 code = ErrorCodes.RESOURCE_CONFLICT,
                 message = "The request conflicts with the current state of the resource.",
-                details = mapOf("reason" to ex.code),
+                details = merged,
             ),
         )
+    }
 
     @ExceptionHandler(OptimisticLockingFailureException::class, ObjectOptimisticLockingFailureException::class)
     fun onOptimisticLock(

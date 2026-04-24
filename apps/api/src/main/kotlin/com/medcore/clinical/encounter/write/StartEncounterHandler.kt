@@ -4,12 +4,14 @@ import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.persistence.EncounterEntity
 import com.medcore.clinical.encounter.persistence.EncounterRepository
 import com.medcore.clinical.patient.persistence.PatientRepository
+import com.medcore.platform.write.WriteConflictException
 import com.medcore.platform.write.WriteContext
 import com.medcore.tenancy.persistence.TenantRepository
 import jakarta.persistence.EntityNotFoundException
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Component
 
 /**
@@ -68,6 +70,19 @@ class StartEncounterHandler(
             throw EntityNotFoundException("patient not found: ${command.patientId}")
         }
 
+        // Phase 4C.4: at most one IN_PROGRESS encounter per
+        // (tenant, patient). Pre-check is the user-facing
+        // error surface; V22's partial unique index is the
+        // race-proof backstop (translated below on violation).
+        encounterRepository
+            .findInProgressByTenantIdAndPatientId(tenant.id, patient.id)
+            ?.let { existing ->
+                throw WriteConflictException(
+                    code = "encounter_in_progress_exists",
+                    details = mapOf("existingEncounterId" to existing.id.toString()),
+                )
+            }
+
         val now = Instant.now(clock)
         val entity = EncounterEntity(
             id = UUID.randomUUID(),
@@ -82,7 +97,34 @@ class StartEncounterHandler(
             createdBy = context.principal.userId,
             updatedBy = context.principal.userId,
         )
-        val saved = encounterRepository.saveAndFlush(entity)
+        val saved = try {
+            encounterRepository.saveAndFlush(entity)
+        } catch (ex: DataIntegrityViolationException) {
+            // Race path: a concurrent Start-encounter from another
+            // request (or tab, or double-click) passed the same
+            // pre-check and committed first. V22's
+            // `uq_clinical_encounter_one_in_progress_per_patient`
+            // partial unique index refuses our INSERT. Translate
+            // to the same WriteConflictException the sequential
+            // path throws so callers see an identical 409 body
+            // regardless of which arm fired.
+            val winner = encounterRepository
+                .findInProgressByTenantIdAndPatientId(tenant.id, patient.id)
+            if (winner != null) {
+                throw WriteConflictException(
+                    code = "encounter_in_progress_exists",
+                    cause = ex,
+                    details = mapOf(
+                        "existingEncounterId" to winner.id.toString(),
+                    ),
+                )
+            }
+            // Re-query found no IN_PROGRESS — the violation wasn't
+            // our invariant. Re-throw the original; the generic
+            // 409 handler takes over (`resource.conflict` without
+            // a specific reason).
+            throw ex
+        }
         return EncounterSnapshot.from(saved)
     }
 }

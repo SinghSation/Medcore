@@ -70,9 +70,15 @@ class ListPatientEncountersIntegrationTest {
     @Test
     fun `OWNER lists 3 encounters newest-first — 200 + ONE list-access audit row`() {
         val (_, patientId) = seedPatient("alice", role = "OWNER")
+        // Phase 4C.4 invariant: at most one IN_PROGRESS encounter
+        // per (tenant, patient). Cancel each encounter before
+        // opening the next so all three rows co-exist; closed rows
+        // still list.
         val e1 = createEncounterHttp("alice", "acme-health", patientId)
+        cancelEncounterHelper("alice", e1, "NO_SHOW")
         Thread.sleep(5)
         val e2 = createEncounterHttp("alice", "acme-health", patientId)
+        cancelEncounterHelper("alice", e2, "NO_SHOW")
         Thread.sleep(5)
         val e3 = createEncounterHttp("alice", "acme-health", patientId)
         jdbc.update("DELETE FROM audit.audit_event")
@@ -311,5 +317,24 @@ class ListPatientEncountersIntegrationTest {
 
     private fun bearerOnly(token: String) = HttpHeaders().apply {
         add(HttpHeaders.AUTHORIZATION, "Bearer $token")
+    }
+
+    // 4C.4 helper — cancel an encounter so another can be started
+    // on the same patient without tripping the per-patient
+    // IN_PROGRESS uniqueness invariant (V22).
+    private fun cancelEncounterHelper(
+        subject: String,
+        encounterId: UUID,
+        reason: String,
+    ) {
+        val headers = authJsonHeaders(tokenFor(subject)).apply {
+            add("X-Medcore-Tenant", "acme-health")
+        }
+        rest.exchange(
+            "/api/v1/tenants/acme-health/encounters/$encounterId/cancel",
+            HttpMethod.POST,
+            HttpEntity("""{"cancelReason":"$reason"}""", headers),
+            Map::class.java,
+        )
     }
 }
