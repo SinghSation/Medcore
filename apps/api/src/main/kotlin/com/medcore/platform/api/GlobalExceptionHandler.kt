@@ -1,6 +1,7 @@
 package com.medcore.platform.api
 
 import com.medcore.clinical.patient.service.DuplicatePatientWarningException
+import com.medcore.platform.read.pagination.CursorMalformedException
 import com.medcore.platform.write.WriteConflictException
 import com.medcore.platform.write.WriteValidationException
 import com.medcore.tenancy.context.TenantContextMissingException
@@ -199,6 +200,34 @@ class GlobalExceptionHandler {
                 details = mapOf(
                     "validationErrors" to listOf(
                         mapOf("field" to ex.field, "code" to ex.code),
+                    ),
+                ),
+            ),
+        )
+
+    /**
+     * ADR-009: pagination cursor decode failures map to 422 in the
+     * same envelope shape as [WriteValidationException]. Cursor
+     * malformations are edge-of-system parsing errors (bad base64,
+     * bad JSON, missing key, stale `k` discriminator) — not state
+     * conflicts (409), not missing resources (404).
+     *
+     * The reason carries `code:malformed`. A future stale-format
+     * cursor surface (rejecting v1 cursors after a v2 substrate
+     * upgrade) can raise the same exception with a richer reason
+     * field; for now the single code is enough.
+     */
+    @ExceptionHandler(CursorMalformedException::class)
+    fun onCursorMalformed(
+        @Suppress("UNUSED_PARAMETER") ex: CursorMalformedException,
+    ): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(
+            ErrorResponses.of(
+                code = ErrorCodes.REQUEST_VALIDATION_FAILED,
+                message = "One or more fields failed validation.",
+                details = mapOf(
+                    "validationErrors" to listOf(
+                        mapOf("field" to "cursor", "code" to "malformed"),
                     ),
                 ),
             ),
