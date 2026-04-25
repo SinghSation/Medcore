@@ -56,11 +56,32 @@
 -- regular note creates pay nothing beyond a single NULL check.
 -- Only amendment INSERTs touch the lookup query, and that lookup
 -- hits the primary-key index on `clinical.encounter_note(id)`.
+--
+-- ### SECURITY DEFINER + locked search_path
+--
+-- The trigger exists specifically to backstop direct-SQL writers
+-- (DBA queries, future bugs, batch import) that bypass the
+-- handler. Those writers may NOT be running with the RLS GUCs
+-- the application sets, so a plain `SELECT amends_id, encounter_id
+-- FROM clinical.encounter_note` inside the trigger would be
+-- filtered by V19's RLS — returning NULLs that short-circuit
+-- both guards and let the invalid INSERT through. That defeats
+-- the whole point of the trigger.
+--
+-- Fix: declare the function `SECURITY DEFINER` so the lookup
+-- runs with the migrator role's privileges (which bypass RLS),
+-- and pin `search_path = clinical, pg_temp` so an attacker who
+-- somehow controls a session search_path can't redirect the
+-- table reference to a shadow table. Same pattern the codebase
+-- uses for `audit.append_event` (V9) and the V12/V13/V14
+-- migrator-side helper functions.
 
 CREATE OR REPLACE FUNCTION
     clinical.fn_clinical_encounter_note_amendment_integrity()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = clinical, pg_temp
 AS $$
 DECLARE
     v_orig_amends      UUID;

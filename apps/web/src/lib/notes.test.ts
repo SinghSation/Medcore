@@ -132,12 +132,17 @@ describe('encounter notes API client', () => {
   })
 
   it('propagates ApiError(409) with details.reason on conflict surfaces', async () => {
-    // The platform contract: every 409 carries details.reason.
-    // The lib propagates the raw body so callers (e.g.
-    // EncounterDetailPage) can dispatch on it.
+    // The platform contract: every 409 carries `code` + `message`
+    // + `details.reason`. The lib propagates the raw body so
+    // callers (e.g. EncounterDetailPage) can dispatch on it. The
+    // 409 fixture mirrors the exact shape `GlobalExceptionHandler.
+    // onWriteConflict` emits — keeping the mock honest to the API
+    // contract even though the assertion below only narrows on
+    // `details.reason`.
     fetchSpy.mockResolvedValue(
       jsonResponse(409, {
         code: 'resource.conflict',
+        message: 'The request conflicts with the current state of the resource.',
         details: { reason: 'cannot_amend_unsigned_note' },
       }),
     )
