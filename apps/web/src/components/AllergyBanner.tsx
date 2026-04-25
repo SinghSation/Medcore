@@ -266,6 +266,18 @@ function AllergyManageModal({
     <div
       role="dialog"
       aria-modal="true"
+      aria-labelledby="allergy-manage-title"
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') onClose()
+      }}
+      onClick={(e) => {
+        // Backdrop click — only dismiss when the click is on the
+        // overlay itself, not on the dialog content. Focus trap
+        // is a known gap (no app-wide library yet) — tracked as
+        // a follow-up.
+        if (e.target === e.currentTarget) onClose()
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"
       data-testid="allergy-manage-modal"
     >
@@ -274,7 +286,9 @@ function AllergyManageModal({
         data-phi
       >
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Manage allergies</h2>
+          <h2 id="allergy-manage-title" className="text-lg font-semibold">
+            Manage allergies
+          </h2>
           <Button
             variant="outline"
             size="sm"

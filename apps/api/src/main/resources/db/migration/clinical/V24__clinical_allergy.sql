@@ -107,6 +107,18 @@ CREATE TABLE IF NOT EXISTS clinical.allergy (
     updated_by                  UUID         NOT NULL,
     row_version                 BIGINT       NOT NULL DEFAULT 0,
 
+    -- Platform soft-delete column (per .cursor/rules/04 PHI-table
+    -- baseline). 4E.1 ships with NO write path that populates it
+    -- — clinical lifecycle uses `status` (ACTIVE / INACTIVE /
+    -- ENTERED_IN_ERROR) per the locked Q1 decision. `deleted_at`
+    -- is a separate axis reserved for future operational
+    -- redaction (e.g., "wrong-patient PHI must be removed without
+    -- exposing the clinical 'this was a mistake' state in the
+    -- normal banner"). Future cross-table retention / cleanup
+    -- tooling that filters by `deleted_at IS NULL` will work
+    -- additively when that slice lands.
+    deleted_at                  TIMESTAMPTZ  NULL,
+
     CONSTRAINT pk_clinical_allergy
         PRIMARY KEY (id),
     CONSTRAINT fk_clinical_allergy_tenant
@@ -130,21 +142,24 @@ CREATE TABLE IF NOT EXISTS clinical.allergy (
             'ACTIVE', 'INACTIVE', 'ENTERED_IN_ERROR'
         )),
 
-    -- Substance text length: trim-nonempty + bounded.
-    -- Substance names are short ("Penicillin", "Tree nuts");
-    -- 500 chars is generous for compound descriptions ("Iodinated
-    -- contrast dye, oral preparation"). Reaction is much longer
-    -- because it's prose ("hives + facial swelling, resolved
-    -- with antihistamines").
+    -- Substance + reaction text discipline: trim-nonempty +
+    -- bounded. Both checks key on `btrim()` so a whitespace-only
+    -- value cannot land via direct SQL even if the application
+    -- validator is bypassed (RLS-only path, future direct backfill,
+    -- or a Kotlin validator regression). Substance names are
+    -- short ("Penicillin", "Tree nuts"); 500 chars is generous
+    -- for compound descriptions ("Iodinated contrast dye, oral
+    -- preparation"). Reaction is much longer because it is prose
+    -- ("hives + facial swelling, resolved with antihistamines").
     CONSTRAINT ck_clinical_allergy_substance_text_length
         CHECK (
-            char_length(substance_text) >= 1
+            char_length(btrim(substance_text)) >= 1
             AND char_length(substance_text) <= 500
         ),
     CONSTRAINT ck_clinical_allergy_reaction_text_length
         CHECK (
             reaction_text IS NULL
-            OR char_length(reaction_text) <= 4000
+            OR char_length(btrim(reaction_text)) <= 4000
         ),
 
     -- Coding coherence: code and system are populated together

@@ -159,8 +159,15 @@ describe('allergies API client', () => {
   })
 
   it('propagates 403 from addAllergy when caller lacks ALLERGY_WRITE', async () => {
+    // Platform error envelope is a flat {code, message, details?}
+    // (Phase 3G unified envelope) — not a nested {error: {...}}.
+    // Aligning the fixture with the real wire shape so the test
+    // would surface an envelope regression.
     fetchSpy.mockResolvedValue(
-      jsonResponse(403, { error: { code: 'auth.forbidden' } }),
+      jsonResponse(403, {
+        code: 'auth.forbidden',
+        message: 'Caller does not have ALLERGY_WRITE on this tenant.',
+      }),
     )
     await expect(
       addAllergy({

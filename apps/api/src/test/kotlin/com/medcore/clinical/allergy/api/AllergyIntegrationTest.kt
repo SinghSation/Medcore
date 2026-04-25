@@ -431,12 +431,13 @@ class AllergyIntegrationTest {
         val (_, _, patientId) = seedOwnerAndPatient("alice")
 
         // Seed three allergies; transition one to INACTIVE and one to ENTERED_IN_ERROR.
+        // The list ordering invariant we assert is status-bucket priority
+        // (ACTIVE → INACTIVE → ENTERED_IN_ERROR), not created_at — so the
+        // tie-breaker doesn't need wall-clock spacing between inserts.
         val (a1, _) = createAllergy("alice", patientId, body =
             """{"substanceText":"Tree nuts","severity":"MODERATE"}""")
-        Thread.sleep(5)
         val (a2, _) = createAllergy("alice", patientId, body =
             """{"substanceText":"Latex","severity":"MILD"}""")
-        Thread.sleep(5)
         val (a3, _) = createAllergy("alice", patientId, body =
             """{"substanceText":"Penicillin","severity":"SEVERE"}""")
         // a1 stays ACTIVE; a2 → INACTIVE; a3 → ENTERED_IN_ERROR.

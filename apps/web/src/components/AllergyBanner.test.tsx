@@ -180,8 +180,10 @@ describe('<AllergyBanner />', () => {
     await waitFor(() => {
       expect(screen.getByTestId('allergy-banner-list')).toBeInTheDocument()
       const matches = screen.getAllByText('Sulfa drugs')
-      // 2 occurrences = banner row + management-modal row.
-      expect(matches.length).toBeGreaterThanOrEqual(1)
+      // Exactly 2 occurrences = banner row + management-modal row.
+      // Tightening from >=1 catches a regression where the banner
+      // stops mounting (only the modal row would remain).
+      expect(matches).toHaveLength(2)
     })
     const banner = screen.getByTestId('allergy-banner-list')
     expect(banner).toHaveTextContent('Sulfa drugs')
