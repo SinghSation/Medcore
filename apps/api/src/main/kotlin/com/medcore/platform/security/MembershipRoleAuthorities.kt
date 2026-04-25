@@ -48,6 +48,9 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.NOTE_READ,
         MedcoreAuthority.NOTE_WRITE,
         MedcoreAuthority.NOTE_SIGN,
+        // Allergies (clinical) — full access (Phase 4E.1).
+        MedcoreAuthority.ALLERGY_READ,
+        MedcoreAuthority.ALLERGY_WRITE,
     )
 
     val ADMIN_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -70,6 +73,9 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.NOTE_READ,
         MedcoreAuthority.NOTE_WRITE,
         MedcoreAuthority.NOTE_SIGN,
+        // Allergies (clinical) — full access (Phase 4E.1).
+        MedcoreAuthority.ALLERGY_READ,
+        MedcoreAuthority.ALLERGY_WRITE,
     )
 
     val MEMBER_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -86,6 +92,10 @@ object MembershipRoleAuthorities {
         MedcoreAuthority.ENCOUNTER_READ,
         // Clinical notes — READ only (Phase 4D.1).
         MedcoreAuthority.NOTE_READ,
+        // Allergies — READ only (Phase 4E.1). Banner visibility
+        // is a clinical-safety concern: every member who reads
+        // a chart must see the allergies, even read-only roles.
+        MedcoreAuthority.ALLERGY_READ,
     )
 
     private val MAPPING: Map<MembershipRole, Set<MedcoreAuthority>> = mapOf(

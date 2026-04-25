@@ -656,6 +656,135 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_NOTE_AMENDED("clinical.encounter.note.amended"),
 
+    // --- Phase 4E.1: clinical allergies (longitudinal data) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/patients/{patientId}/allergies`
+     * when an OWNER/ADMIN records a new allergy on a patient
+     * (Phase 4E.1). First longitudinal patient-level clinical
+     * write action in Medcore.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.allergy.write.AddAllergyAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.allergy"`
+     *   - `resource_id`   = newly-minted allergy UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.allergy.add|severity:<CLOSED_ENUM>"`
+     *     where `<CLOSED_ENUM>` is one of MILD / MODERATE /
+     *     SEVERE / LIFE_THREATENING.
+     *
+     * **PHI discipline.** The substance text and reaction text
+     * are PHI and NEVER appear in the reason slug. Only the
+     * closed-enum severity token is embedded — useful for
+     * compliance queries ("how many LIFE_THREATENING allergies
+     * were recorded last quarter?") without leaking content.
+     *
+     * No no-op suppression: an add is always a persisted INSERT.
+     */
+    CLINICAL_ALLERGY_ADDED("clinical.allergy.added"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `PATCH /api/v1/tenants/{slug}/patients/{patientId}/allergies/{id}`
+     * when an OWNER/ADMIN updates an allergy's mutable fields
+     * (severity, reaction_text, onset_date) or transitions
+     * status (ACTIVE ↔ INACTIVE) (Phase 4E.1).
+     *
+     * **NOT used for ENTERED_IN_ERROR transitions** — those
+     * emit [CLINICAL_ALLERGY_REVOKED] instead, mirroring the
+     * 4A.3 patient-identifier `revoked` discipline. The wire
+     * action distinction makes "this row was retracted as a
+     * mistake" forensically distinct from "this row was
+     * clinically refined."
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.allergy.write.UpdateAllergyAuditor]:
+     *   - `resource_type` = `"clinical.allergy"`
+     *   - `resource_id`   = target allergy UUID
+     *   - `reason`        = `"intent:clinical.allergy.update|fields:<comma-sep>"`
+     *     and, when the patch includes a status transition,
+     *     `"|status_from:<X>|status_to:<Y>"` is appended.
+     *
+     * **PHI discipline.** Only field NAMES (closed set:
+     * `severity`, `reaction_text`, `onset_date`, `status`) and
+     * closed-enum status tokens appear. New values for
+     * reaction_text NEVER appear (PHI). Old/new value diffing
+     * waits for the Phase 7 audit-schema-evolution ADR.
+     *
+     * Suppressed for no-op writes (PATCH with every field
+     * unchanged) per the Phase 3J.2 / 4A.2 precedent.
+     */
+    CLINICAL_ALLERGY_UPDATED("clinical.allergy.updated"),
+
+    /**
+     * Emitted on the SUCCESS path of an allergy status
+     * transition to `ENTERED_IN_ERROR` — the soft-delete /
+     * retraction mechanism in 4E.1.
+     *
+     * Action verb matches 4A.3 `PATIENT_IDENTIFIER_REVOKED`
+     * discipline: revocation is a soft, terminal lifecycle
+     * transition (not a row delete). The record persists for
+     * audit + clinical-history integrity; only its `status`
+     * changes.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.allergy.write.RevokeAllergyAuditor]:
+     *   - `resource_type` = `"clinical.allergy"`
+     *   - `resource_id`   = target allergy UUID (soft-deleted)
+     *   - `reason`        = `"intent:clinical.allergy.revoke|prior_status:<X>"`
+     *
+     * **`prior_status` is a closed-enum token** (ACTIVE or
+     * INACTIVE — ENTERED_IN_ERROR is terminal so it cannot be
+     * the prior status). Forensic queries can isolate
+     * "ACTIVE-to-ENTERED_IN_ERROR retractions" (a stronger
+     * signal of a recording error) from "INACTIVE-to-
+     * ENTERED_IN_ERROR" (cleanup).
+     *
+     * Suppressed for idempotent retries on already-
+     * ENTERED_IN_ERROR rows (handler returns `changed = false`).
+     */
+    CLINICAL_ALLERGY_REVOKED("clinical.allergy.revoked"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/patients/{patientId}/allergies`
+     * when the caller successfully lists allergies for a patient
+     * (Phase 4E.1).
+     *
+     * Bulk-disclosure read, parallel to
+     * [CLINICAL_ENCOUNTER_LIST_ACCESSED] +
+     * [CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED]. Single-allergy
+     * GET is not a 4E.1 surface (the banner shows the full list);
+     * a future single-resource GET would emit a sibling
+     * `CLINICAL_ALLERGY_ACCESSED` action.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.allergy.read.ListPatientAllergiesAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.allergy"`
+     *   - `resource_id`   = null (list — no single target row)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.allergy.list|count:N"`
+     *
+     * **PHI discipline.** Reason carries ONLY the fixed intent
+     * token + one bounded integer (`count`). Patient UUID, MRN,
+     * substance text, severity values NEVER appear. Forensic
+     * narrowing from audit-row to disclosed allergies happens
+     * via the `request_id` → structured-log join (same pattern
+     * as 4B.1 patient list / 4D.1 note list).
+     *
+     * One row per list call, including `count = 0`. A zero-row
+     * banner ("No allergies recorded") IS still a disclosure
+     * event (the caller learned the patient's allergy slate is
+     * currently empty).
+     */
+    CLINICAL_ALLERGY_LIST_ACCESSED("clinical.allergy.list_accessed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to
