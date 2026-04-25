@@ -54,7 +54,9 @@ object CursorCodec {
      * discriminator check and types each field.
      *
      * @throws CursorMalformedException when the token is not
-     *   valid base64 or its JSON payload is unparseable.
+     *   valid base64, its JSON payload is unparseable, or the
+     *   parsed JSON is not an object (e.g., a forged token whose
+     *   body parses to `[]`, `"foo"`, `null`, or a number).
      */
     @Suppress("UNCHECKED_CAST")
     fun decodeMap(token: String): Map<String, Any?> {
@@ -63,10 +65,19 @@ object CursorCodec {
         } catch (ex: IllegalArgumentException) {
             throw CursorMalformedException("not valid base64")
         }
-        return try {
-            mapper.readValue(bytes, Map::class.java) as Map<String, Any?>
-        } catch (ex: Exception) {
+        // Parse to a JsonNode first so non-object payloads (arrays,
+        // scalars, null) are rejected explicitly rather than being
+        // silently coerced by `readValue(Map::class.java)`. The
+        // narrow type catches IO/parse failures from Jackson; a
+        // truly unexpected exception (e.g., OOM) still propagates.
+        val node = try {
+            mapper.readTree(bytes)
+        } catch (ex: com.fasterxml.jackson.core.JsonProcessingException) {
             throw CursorMalformedException("not valid JSON: ${ex.javaClass.simpleName}")
         }
+        if (node == null || !node.isObject) {
+            throw CursorMalformedException("not a JSON object")
+        }
+        return mapper.convertValue(node, Map::class.java) as Map<String, Any?>
     }
 }

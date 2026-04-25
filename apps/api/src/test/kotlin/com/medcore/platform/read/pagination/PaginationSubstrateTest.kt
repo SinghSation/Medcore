@@ -219,4 +219,88 @@ class PaginationSubstrateTest {
         assertThatExceptionOfType(CursorMalformedException::class.java)
             .isThrownBy { TimeCursor.fromMap(incomplete, expectedKey = "clinical.encounter.v1") }
     }
+
+    /**
+     * Sister coverage to the missing-field tests above. A forged
+     * or truncated cursor whose `ts` / `id` keys are *present*
+     * but unparseable used to leak `DateTimeParseException` /
+     * `IllegalArgumentException` from `Instant.parse` /
+     * `UUID.fromString`, surfacing as a 500 instead of the
+     * platform's 422 `cursor|malformed` envelope. The fromMap
+     * decoders now wrap those parses; these tests prevent
+     * regression.
+     */
+    @Test
+    fun `BucketedCursor fromMap throws on unparseable ts`() {
+        val bad = mapOf<String, Any?>(
+            "k" to "clinical.problem.v1",
+            "b" to 0,
+            "ts" to "not-a-date",
+            "id" to "00000000-0000-0000-0000-000000000001",
+        )
+        assertThatExceptionOfType(CursorMalformedException::class.java)
+            .isThrownBy { BucketedCursor.fromMap(bad, expectedKey = "clinical.problem.v1") }
+    }
+
+    @Test
+    fun `BucketedCursor fromMap throws on unparseable id`() {
+        val bad = mapOf<String, Any?>(
+            "k" to "clinical.problem.v1",
+            "b" to 0,
+            "ts" to "2026-04-25T10:00:00Z",
+            "id" to "not-a-uuid",
+        )
+        assertThatExceptionOfType(CursorMalformedException::class.java)
+            .isThrownBy { BucketedCursor.fromMap(bad, expectedKey = "clinical.problem.v1") }
+    }
+
+    @Test
+    fun `TimeCursor fromMap throws on unparseable ts`() {
+        val bad = mapOf<String, Any?>(
+            "k" to "clinical.encounter.v1",
+            "ts" to "not-a-date",
+            "id" to "00000000-0000-0000-0000-000000000001",
+            "asc" to false,
+        )
+        assertThatExceptionOfType(CursorMalformedException::class.java)
+            .isThrownBy { TimeCursor.fromMap(bad, expectedKey = "clinical.encounter.v1") }
+    }
+
+    @Test
+    fun `TimeCursor fromMap throws on unparseable id`() {
+        val bad = mapOf<String, Any?>(
+            "k" to "clinical.encounter.v1",
+            "ts" to "2026-04-25T10:00:00Z",
+            "id" to "not-a-uuid",
+            "asc" to false,
+        )
+        assertThatExceptionOfType(CursorMalformedException::class.java)
+            .isThrownBy { TimeCursor.fromMap(bad, expectedKey = "clinical.encounter.v1") }
+    }
+
+    /**
+     * Coverage for the [CursorCodec] non-Map-JSON guard. Forged
+     * tokens whose JSON body parses to an array, scalar, or null
+     * used to be silently coerced by `readValue(Map::class.java)`;
+     * they now surface as 422 `cursor|malformed`.
+     */
+    @Test
+    fun `CursorCodec throws CursorMalformedException for JSON that is not an object`() {
+        // Each token below decodes to legitimate base64 JSON, but
+        // the JSON value is a non-object that the cursor contract
+        // rejects.
+        val arrayToken = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("[]".toByteArray())
+        val numberToken = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("42".toByteArray())
+        val stringToken = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("\"foo\"".toByteArray())
+        val nullToken = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("null".toByteArray())
+
+        listOf(arrayToken, numberToken, stringToken, nullToken).forEach { token ->
+            assertThatExceptionOfType(CursorMalformedException::class.java)
+                .isThrownBy { CursorCodec.decodeMap(token) }
+        }
+    }
 }

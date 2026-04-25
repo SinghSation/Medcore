@@ -87,10 +87,8 @@ data class BucketedCursor(
             }
             val b = (map["b"] as? Number)?.toInt()
                 ?: throw CursorMalformedException("missing 'b'")
-            val ts = (map["ts"] as? String)?.let { Instant.parse(it) }
-                ?: throw CursorMalformedException("missing 'ts'")
-            val id = (map["id"] as? String)?.let { UUID.fromString(it) }
-                ?: throw CursorMalformedException("missing 'id'")
+            val ts = parseInstant(map["ts"], "ts")
+            val id = parseUuid(map["id"], "id")
             return BucketedCursor(k = k, bucket = b, ts = ts, id = id)
         }
     }
@@ -124,10 +122,8 @@ data class TimeCursor(
             if (k != expectedKey) {
                 throw CursorMalformedException("expected k='$expectedKey', got '$k'")
             }
-            val ts = (map["ts"] as? String)?.let { Instant.parse(it) }
-                ?: throw CursorMalformedException("missing 'ts'")
-            val id = (map["id"] as? String)?.let { UUID.fromString(it) }
-                ?: throw CursorMalformedException("missing 'id'")
+            val ts = parseInstant(map["ts"], "ts")
+            val id = parseUuid(map["id"], "id")
             val asc = map["asc"] as? Boolean
                 ?: throw CursorMalformedException("missing 'asc'")
             return TimeCursor(k = k, ts = ts, id = id, ascending = asc)
@@ -145,3 +141,34 @@ data class TimeCursor(
  * It's a parsing error.
  */
 class CursorMalformedException(reason: String) : RuntimeException(reason)
+
+/**
+ * Decode helpers shared by [BucketedCursor.fromMap] and
+ * [TimeCursor.fromMap]. They convert *both* "missing key" AND
+ * "key present but unparseable" into [CursorMalformedException]
+ * — the only outcome the platform exception handler maps to
+ * 422 `cursor|malformed`. Without these wrappers a forged or
+ * truncated cursor with a String `ts`/`id` that fails
+ * [Instant.parse] / [UUID.fromString] would propagate the raw
+ * `DateTimeParseException` / `IllegalArgumentException`,
+ * surfacing as a generic 500.
+ */
+private fun parseInstant(raw: Any?, field: String): Instant {
+    val str = raw as? String
+        ?: throw CursorMalformedException("missing '$field'")
+    return try {
+        Instant.parse(str)
+    } catch (ex: java.time.format.DateTimeParseException) {
+        throw CursorMalformedException("unparseable '$field'")
+    }
+}
+
+private fun parseUuid(raw: Any?, field: String): UUID {
+    val str = raw as? String
+        ?: throw CursorMalformedException("missing '$field'")
+    return try {
+        UUID.fromString(str)
+    } catch (ex: IllegalArgumentException) {
+        throw CursorMalformedException("unparseable '$field'")
+    }
+}
