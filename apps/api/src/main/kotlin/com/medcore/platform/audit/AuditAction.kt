@@ -608,6 +608,54 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ENCOUNTER_NOTE_SIGNED("clinical.encounter.note.signed"),
 
+    // --- Phase 4D.6: encounter note amendments ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes/{noteId}/amend`
+     * when an OWNER/ADMIN creates an amendment to a SIGNED note
+     * (Phase 4D.6). The amendment is itself a new note row with
+     * `amends_id = original.id`, `status = DRAFT`. The original
+     * SIGNED note is never mutated — V20's immutability trigger
+     * guarantees that. The amendment goes through the existing
+     * 4D.5 sign workflow to be promoted to SIGNED.
+     *
+     * Normative shape contract lives on
+     * [com.medcore.clinical.encounter.write.AmendNoteAuditor]:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId (the amender)
+     *   - `tenant_id`     = amendment note's tenant UUID
+     *   - `resource_type` = `"clinical.encounter.note"`
+     *   - `resource_id`   = AMENDMENT note UUID (not the original)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.encounter.note.amend|originalNoteId:<uuid>"`
+     *
+     * **`originalNoteId` in the reason is normative.** The
+     * relationship original ↔ amendment is the entire purpose of
+     * this action; embedding both UUIDs (one in `resource_id`,
+     * one in `reason`) lets a single audit-row read reconstruct
+     * the chain without joining `clinical.encounter_note`. Both
+     * IDs are random row identifiers — not PHI.
+     *
+     * **Single-level chains only.** Amending an amendment
+     * (`original.amends_id IS NOT NULL`) is refused at the
+     * handler with `WriteConflictException("cannot_amend_an_amendment")`.
+     * V23's trigger refuses the same case at the DB layer.
+     *
+     * **No second `CREATED` audit row.** An amendment IS a row
+     * insert, but the auditor emits only this action — not also
+     * [CLINICAL_ENCOUNTER_NOTE_CREATED]. One event, one row.
+     *
+     * **Conflict path (409 `resource.conflict`).** Three reasons
+     * throw [com.medcore.platform.write.WriteConflictException]
+     * and emit NO audit row:
+     *   - `cannot_amend_unsigned_note` (original is DRAFT)
+     *   - `cannot_amend_an_amendment` (chain refusal)
+     *   - `amendment_integrity_violation` (V23 trigger fired on
+     *     a race or post-handler bypass)
+     * Only [AUTHZ_WRITE_DENIED] is emitted for authz failures.
+     */
+    CLINICAL_ENCOUNTER_NOTE_AMENDED("clinical.encounter.note.amended"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

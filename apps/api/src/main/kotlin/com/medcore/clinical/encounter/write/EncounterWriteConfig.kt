@@ -126,6 +126,24 @@ class EncounterWriteConfig {
             txHook = phiRlsTxHook,
         )
 
+    // --- Phase 4D.6: encounter note amendments ---
+
+    @Bean
+    fun amendNoteGate(
+        policy: AmendNotePolicy,
+        auditor: AmendNoteAuditor,
+        validator: AmendNoteValidator,
+        txManager: PlatformTransactionManager,
+        phiRlsTxHook: PhiRlsTxHook,
+    ): WriteGate<AmendNoteCommand, EncounterNoteSnapshot> =
+        WriteGate(
+            policy = policy,
+            auditor = auditor,
+            txManager = txManager,
+            validator = validator,
+            txHook = phiRlsTxHook,
+        )
+
     // --- Phase 4C.5: encounter finish + cancel ---
 
     @Bean
