@@ -84,11 +84,15 @@ export async function getEncounter(
 
 /**
  * Wire shape of `EncounterListResponse` from
- * `GET /patients/{id}/encounters` (Phase 4C.3). Un-paginated;
- * envelope mirrors `EncounterNoteList` — `items` only.
+ * `GET /patients/{id}/encounters` (Phase 4C.3, paginated as
+ * of platform-pagination chunk C, ADR-009).
+ *
+ * Card surfaces in MVP render the first page only; future
+ * "load more" UX would consume `pageInfo.nextCursor` directly.
  */
 export interface EncounterList {
   items: Encounter[]
+  pageInfo: import('./pagination').PageInfo
 }
 
 export interface ListPatientEncountersParams {

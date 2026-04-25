@@ -1,0 +1,42 @@
+-- V27__encounter_pagination_index.sql — platform-pagination chunk C
+--
+-- Covering index for cursor-paginated reads on
+-- `clinical.encounter` (per-patient list). ADR-009 §2.5 sort
+-- axis: `(createdAt DESC, id DESC)`. The cursor walk's WHERE
+-- clause is:
+--
+--   WHERE tenant_id = :tenant_id
+--     AND patient_id = :patient_id
+--     AND ( created_at < :ts_last
+--           OR ( created_at = :ts_last AND id < :id_last ) )
+--   ORDER BY created_at DESC, id DESC
+--   LIMIT :pageSize + 1
+--
+-- The composite index `(tenant_id, patient_id, created_at, id)`
+-- lets PG index-scan directly for cursor walks.
+--
+-- ### Why createdAt instead of startedAt
+--
+-- The Pre-pagination 4C.3 query was
+-- `ORDER BY startedAt DESC, createdAt DESC`. `startedAt` is
+-- nullable on the entity (V18 schema) — a future "scheduled
+-- encounter" slice would set it independently of `createdAt`,
+-- but as of today, the POST endpoint sets `startedAt = now()`
+-- at insert, so `startedAt == createdAt` for the typical flow.
+--
+-- Cursor pagination requires a single non-null primary axis +
+-- a unique tiebreaker. `createdAt` (always non-null) + `id`
+-- (UUID) satisfies both. For the typical IN_PROGRESS-on-create
+-- flow this is observably identical to the previous ordering;
+-- when a future scheduled-encounter slice diverges them, that
+-- slice can re-evaluate (e.g., introduce a separate "scheduled
+-- list" surface or coalesce on the wire).
+--
+-- ### Rollback
+--
+-- `DROP INDEX IF EXISTS clinical.ix_encounter_pagination;` —
+-- pagination falls back to a sort scan, correct but slower at
+-- scale. Reversible.
+
+CREATE INDEX IF NOT EXISTS ix_encounter_pagination
+    ON clinical.encounter (tenant_id, patient_id, created_at, id);

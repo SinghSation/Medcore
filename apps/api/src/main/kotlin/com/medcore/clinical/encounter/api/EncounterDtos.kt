@@ -166,11 +166,13 @@ data class CancelEncounterRequest(
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class EncounterListResponse(
     val items: List<EncounterResponse>,
+    val pageInfo: PageInfoDto,
 ) {
     companion object {
         fun from(result: ListPatientEncountersResult): EncounterListResponse =
             EncounterListResponse(
                 items = result.items.map { EncounterResponse.from(it) },
+                pageInfo = PageInfoDto.from(result.pageInfo),
             )
     }
 }

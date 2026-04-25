@@ -26,19 +26,22 @@ import org.springframework.jdbc.core.JdbcTemplate
 /**
  * End-to-end coverage for
  * `GET /api/v1/tenants/{slug}/patients/{patientId}/encounters`
- * (Phase 4C.3).
+ * (Phase 4C.3, paginated as of platform-pagination chunk C,
+ * ADR-009).
  *
  * Proves:
- *   1. Happy path: 200 + items array (newest first) + ONE
- *      `CLINICAL_ENCOUNTER_LIST_ACCESSED` audit row with reason
- *      `"intent:clinical.encounter.list|count:N"`.
- *   2. Empty list: 200 with items=[] + ONE audit row (count:0).
- *   3. All three roles can read (ENCOUNTER_READ granted
- *      universally per 4C.1 role map).
- *   4. 404 on unknown patientId.
- *   5. 404 on cross-tenant patient (no existence leak).
- *   6. Filter-level denial (no membership) — 403 + no list
- *      audit row.
+ *   1. Happy path: 200 + paginated envelope `{items, pageInfo}`
+ *      (newest first) + ONE `CLINICAL_ENCOUNTER_LIST_ACCESSED`
+ *      audit row with per-page reason
+ *      `intent:clinical.encounter.list|count:N|page_size:P|has_next:bool`.
+ *   2. Empty list: 200 + items=[] + ONE audit row (count:0).
+ *   3. All three roles can read.
+ *   4. 404 on unknown / cross-tenant patient.
+ *   5. Filter-level denial (no membership) — 403, no audit.
+ *   6. **NEW (chunk C)** — pageSize=2 returns 2 items + cursor;
+ *      following the cursor returns the rest. Two audit rows.
+ *   7. **NEW (chunk C)** — pageSize=0 → 422 out_of_range.
+ *   8. **NEW (chunk C)** — malformed cursor → 422 cursor|malformed.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration::class)
@@ -98,9 +101,18 @@ class ListPatientEncountersIntegrationTest {
         assertThat(items[1]["id"]).isEqualTo(e2.toString())
         assertThat(items[2]["id"]).isEqualTo(e1.toString())
 
+        // ADR-009 §2.4: pageInfo always present.
+        @Suppress("UNCHECKED_CAST")
+        val pageInfo = data["pageInfo"] as Map<String, Any?>
+        assertThat(pageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(pageInfo["nextCursor"]).isNull()
+
         val row = auditRows("clinical.encounter.list_accessed").single()
+        // ADR-009 §2.7: per-page count + page_size + has_next.
         assertThat(row["reason"])
-            .isEqualTo("intent:clinical.encounter.list|count:3")
+            .isEqualTo(
+                "intent:clinical.encounter.list|count:3|page_size:50|has_next:false",
+            )
         assertThat(row["resource_type"]).isEqualTo("clinical.encounter")
         assertThat(row["resource_id"]).isNull()
         assertThat(row["outcome"]).isEqualTo("SUCCESS")
@@ -114,12 +126,125 @@ class ListPatientEncountersIntegrationTest {
         val resp = get("alice", "acme-health", patientId)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
         @Suppress("UNCHECKED_CAST")
-        val items = ((resp.body!!["data"] as Map<String, Any>)["items"]) as List<*>
+        val data = resp.body!!["data"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val items = data["items"] as List<*>
         assertThat(items).isEmpty()
+        @Suppress("UNCHECKED_CAST")
+        val pageInfo = data["pageInfo"] as Map<String, Any?>
+        assertThat(pageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(pageInfo["nextCursor"]).isNull()
 
         val row = auditRows("clinical.encounter.list_accessed").single()
         assertThat(row["reason"])
-            .isEqualTo("intent:clinical.encounter.list|count:0")
+            .isEqualTo(
+                "intent:clinical.encounter.list|count:0|page_size:50|has_next:false",
+            )
+    }
+
+    // ========================================================================
+    // Pagination (chunk C — ADR-009)
+    // ========================================================================
+
+    @Test
+    fun `pageSize=2 returns 2 items with hasNextPage and a usable cursor`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+        // Three encounters; cancel the first two so all three coexist.
+        val e1 = createEncounterHttp("alice", "acme-health", patientId)
+        cancelEncounterHelper("alice", e1, "NO_SHOW")
+        Thread.sleep(5)
+        val e2 = createEncounterHttp("alice", "acme-health", patientId)
+        cancelEncounterHelper("alice", e2, "NO_SHOW")
+        Thread.sleep(5)
+        val e3 = createEncounterHttp("alice", "acme-health", patientId)
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val firstResp = get("alice", "acme-health", patientId, pageSize = 2)
+        assertThat(firstResp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val firstData = firstResp.body!!["data"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val firstItems = firstData["items"] as List<Map<String, Any>>
+        // Newest-first: e3, e2.
+        assertThat(firstItems).hasSize(2)
+        assertThat(firstItems[0]["id"]).isEqualTo(e3.toString())
+        assertThat(firstItems[1]["id"]).isEqualTo(e2.toString())
+        @Suppress("UNCHECKED_CAST")
+        val firstPageInfo = firstData["pageInfo"] as Map<String, Any?>
+        assertThat(firstPageInfo["hasNextPage"]).isEqualTo(true)
+        val nextCursor = firstPageInfo["nextCursor"] as String
+        assertThat(nextCursor).isNotBlank
+        assertThat(nextCursor).doesNotContain("clinical")
+
+        val secondResp = get(
+            "alice", "acme-health", patientId,
+            pageSize = 2, cursor = nextCursor,
+        )
+        assertThat(secondResp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val secondData = secondResp.body!!["data"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val secondItems = secondData["items"] as List<Map<String, Any>>
+        assertThat(secondItems).hasSize(1)
+        assertThat(secondItems[0]["id"]).isEqualTo(e1.toString())
+        @Suppress("UNCHECKED_CAST")
+        val secondPageInfo = secondData["pageInfo"] as Map<String, Any?>
+        assertThat(secondPageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(secondPageInfo["nextCursor"]).isNull()
+
+        // Two audit rows — one per page-fetch.
+        val rows = auditRows("clinical.encounter.list_accessed")
+        assertThat(rows).hasSize(2)
+        assertThat(rows[0]["reason"])
+            .isEqualTo(
+                "intent:clinical.encounter.list|count:2|page_size:2|has_next:true",
+            )
+        assertThat(rows[1]["reason"])
+            .isEqualTo(
+                "intent:clinical.encounter.list|count:1|page_size:2|has_next:false",
+            )
+    }
+
+    @Test
+    fun `pageSize=0 returns 422 out_of_range`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+
+        @Suppress("UNCHECKED_CAST")
+        val resp = rest.exchange(
+            "/api/v1/tenants/acme-health/patients/$patientId/encounters?pageSize=0",
+            HttpMethod.GET,
+            HttpEntity<Void>(authJsonHeaders(tokenFor("alice")).apply {
+                add("X-Medcore-Tenant", "acme-health")
+            }),
+            Map::class.java,
+        ) as ResponseEntity<Map<String, Any>>
+
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("pageSize")
+            assertThat(err["code"]).isEqualTo("out_of_range")
+        }
+    }
+
+    @Test
+    fun `malformed cursor returns 422 cursor|malformed`() {
+        val (_, patientId) = seedPatient("alice", role = "OWNER")
+
+        val resp = get(
+            "alice", "acme-health", patientId,
+            pageSize = 50, cursor = "!!not-a-valid-cursor!!",
+        )
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("cursor")
+            assertThat(err["code"]).isEqualTo("malformed")
+        }
     }
 
     @Test
@@ -225,12 +350,18 @@ class ListPatientEncountersIntegrationTest {
         subject: String,
         slug: String,
         patientId: UUID,
+        pageSize: Int? = null,
+        cursor: String? = null,
     ): ResponseEntity<Map<String, Any>> {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
+        val query = buildList {
+            if (pageSize != null) add("pageSize=$pageSize")
+            if (cursor != null) add("cursor=${java.net.URLEncoder.encode(cursor, "UTF-8")}")
+        }.joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
         return rest.exchange(
-            "/api/v1/tenants/$slug/patients/$patientId/encounters",
+            "/api/v1/tenants/$slug/patients/$patientId/encounters$query",
             HttpMethod.GET,
             HttpEntity<Void>(headers),
             Map::class.java,

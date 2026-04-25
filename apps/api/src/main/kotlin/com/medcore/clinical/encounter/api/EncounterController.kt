@@ -189,8 +189,15 @@ class EncounterController(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
         @PathVariable patientId: UUID,
+        @RequestParam(name = "pageSize", required = false) pageSize: Int?,
+        @RequestParam(name = "cursor", required = false) cursor: String?,
     ): ResponseEntity<ApiResponse<EncounterListResponse>> {
-        val command = ListPatientEncountersCommand(slug = slug, patientId = patientId)
+        val pageRequest = PageRequest.fromQueryParams(pageSize = pageSize, cursor = cursor)
+        val command = ListPatientEncountersCommand(
+            slug = slug,
+            patientId = patientId,
+            pageRequest = pageRequest,
+        )
         val context = WriteContext(principal = principal, idempotencyKey = null)
         val result = listPatientEncountersGate.apply(command, context) { cmd ->
             listPatientEncountersHandler.handle(cmd, context)

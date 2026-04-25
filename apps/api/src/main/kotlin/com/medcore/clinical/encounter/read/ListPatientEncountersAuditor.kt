@@ -12,12 +12,15 @@ import com.medcore.platform.write.WriteDenialReason
 import org.springframework.stereotype.Component
 
 /**
- * [ReadAuditor] for per-patient encounter list (Phase 4C.3).
+ * [ReadAuditor] for per-patient encounter list (Phase 4C.3,
+ * paginated as of platform-pagination chunk C, ADR-009).
  *
- * Follows the 4B.1 patient-list / 4D.1 note-list audit pattern:
- * one audit row per list call, including empty-list calls.
+ * One audit row per list call — paginated calls produce one
+ * row per page. The `count`, `page_size`, and `has_next` tokens
+ * together let forensic queries reconstruct the multi-page
+ * disclosure shape from a single row's reason slug.
  *
- * ### Audit-row shape contract (NORMATIVE)
+ * ### Audit-row shape contract (NORMATIVE — ADR-009 §2.7)
  *
  * **Success — inside the ReadGate tx:**
  *   - action        = CLINICAL_ENCOUNTER_LIST_ACCESSED
@@ -27,7 +30,7 @@ import org.springframework.stereotype.Component
  *   - resource_type = "clinical.encounter"
  *   - resource_id   = null (list; no single target row)
  *   - outcome       = SUCCESS
- *   - reason        = "intent:clinical.encounter.list|count:N"
+ *   - reason        = "intent:clinical.encounter.list|count:N|page_size:P|has_next:bool"
  *
  * **Denial — outside tx:**
  *   - action        = AUTHZ_READ_DENIED
@@ -37,15 +40,18 @@ import org.springframework.stereotype.Component
  *   - outcome       = DENIED
  *   - reason        = "intent:clinical.encounter.list|denial:<code>"
  *
+ * ### `count` semantic shift (NORMATIVE)
+ *
+ * Pre-pagination `count` was total disclosed rows. Post-
+ * pagination it is per-page rows. Audit consumers MUST adapt;
+ * an aggregation over `count` for a given `(actor_id,
+ * resource_type, request_id)` triple sums to total disclosure.
+ * ADR-009 §2.7.
+ *
  * ### tenant_id on empty-list success
  *
- * The result's `items` is empty. The tenant UUID is resolved by
- * looking the parent patient up via [PatientRepository] — the
- * same patient the handler already verified is visible to the
- * caller. Forensic `WHERE tenant_id = …` queries will find the
- * audit row even when no encounters existed for the patient.
- * Mirrors [ListEncounterNotesAuditor] discipline (which resolves
- * tenant via the parent encounter).
+ * Same discipline as chunks B / E — tenant resolves via the
+ * parent patient. Mirrors [ListEncounterNotesAuditor].
  */
 @Component
 class ListPatientEncountersAuditor(
@@ -67,6 +73,13 @@ class ListPatientEncountersAuditor(
         val tenantId = patientRepository.findById(command.patientId)
             .orElse(null)
             ?.tenantId
+        // ADR-009 §2.7: per-page count + page_size + has_next.
+        val reason = buildString {
+            append(INTENT_SLUG)
+            append("|count:").append(result.items.size)
+            append("|page_size:").append(command.pageRequest.pageSize)
+            append("|has_next:").append(result.pageInfo.hasNextPage)
+        }
         auditWriter.write(
             AuditEventCommand(
                 action = AuditAction.CLINICAL_ENCOUNTER_LIST_ACCESSED,
@@ -76,7 +89,7 @@ class ListPatientEncountersAuditor(
                 resourceType = RESOURCE_TYPE,
                 resourceId = null,
                 outcome = AuditOutcome.SUCCESS,
-                reason = "$INTENT_SLUG|count:${result.items.size}",
+                reason = reason,
             ),
         )
     }
