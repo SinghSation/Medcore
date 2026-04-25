@@ -235,10 +235,12 @@ data class ProblemResponse(
 }
 
 /**
- * Wire envelope for the list endpoint (Phase 4E.2).
+ * Wire envelope for the list endpoint (Phase 4E.2, paginated
+ * as of platform-pagination chunk E, ADR-009).
  *
- * Un-paginated, mirrors `AllergyListResponse`. Adding
- * pagination is additive in a later slice.
+ * Carries `pageInfo` per ADR-009 §2.4 — same shape as
+ * `AllergyListResponse` and the other paginated clinical list
+ * responses.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ProblemListResponse(

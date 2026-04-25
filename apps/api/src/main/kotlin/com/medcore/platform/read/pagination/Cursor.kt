@@ -83,7 +83,7 @@ data class BucketedCursor(
             val k = map["k"] as? String
                 ?: throw CursorMalformedException("missing 'k'")
             if (k != expectedKey) {
-                throw CursorMalformedException("expected k='$expectedKey', got '$k'")
+                throw CursorMalformedException("unexpected 'k' (stale or wrong-resource cursor)")
             }
             val b = (map["b"] as? Number)?.toInt()
                 ?: throw CursorMalformedException("missing 'b'")
@@ -120,7 +120,7 @@ data class TimeCursor(
             val k = map["k"] as? String
                 ?: throw CursorMalformedException("missing 'k'")
             if (k != expectedKey) {
-                throw CursorMalformedException("expected k='$expectedKey', got '$k'")
+                throw CursorMalformedException("unexpected 'k' (stale or wrong-resource cursor)")
             }
             val ts = parseInstant(map["ts"], "ts")
             val id = parseUuid(map["id"], "id")

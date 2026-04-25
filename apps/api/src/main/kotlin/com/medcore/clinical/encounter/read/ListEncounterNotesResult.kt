@@ -11,9 +11,9 @@ import com.medcore.platform.read.pagination.PageResponse
  * `totalCount` (FHIR Bundle posture; computing total per page
  * is a redundant `COUNT(*)`).
  *
- * The `Page` typealias (rather than re-declaring fields) keeps
- * the substrate the single source of truth; future evolution
- * of `PageResponse<T>` (e.g., additive metadata) propagates
- * automatically.
+ * Defining this as a typealias to `PageResponse<T>` (rather
+ * than re-declaring its fields) keeps the substrate the single
+ * source of truth; future evolution of `PageResponse<T>` (e.g.,
+ * additive metadata) propagates automatically.
  */
 typealias ListEncounterNotesResult = PageResponse<EncounterNoteSnapshot>

@@ -240,7 +240,8 @@ substrate is in place for when the UX requires deeper history.
 
 ### 3.1 Wins
 
-- All four list endpoints satisfy `.cursor/rules/04` rule.
+- All four list endpoints satisfy the api-contracts pagination
+  rule (`.cursor/rules/02-api-contracts.mdc`).
 - ArchUnit Rule 15 prevents future regression structurally.
 - Single envelope, single cursor format, single default/max page
   size — no per-domain divergence.
@@ -301,13 +302,16 @@ substrate is in place for when the UX requires deeper history.
 
 | Chunk | Scope |
 |---|---|
-| **A** (this commit) | ADR-009 + Kotlin `read.pagination` substrate + frontend `lib/pagination.ts` substrate |
+| **A** | ADR-009 + Kotlin `read.pagination` substrate + frontend `lib/pagination.ts` substrate |
 | **B** | Apply to encounter-notes (smallest sort axis) + V26 index + ArchUnit Rule 15 |
 | **C** | Apply to encounters + V27 index |
 | **D** | Apply to allergies + V28 index |
 | **E** | Apply to problems + V29 index — closes the original CodeRabbit finding |
-| **F** | Frontend: rewire all 4 cards/lists to consume the new envelope; tests follow |
-| **G** | Governance + commit + push + CodeRabbit + merge |
+| **F** | Test-mock envelope alignment + governance + commit + push + CodeRabbit + merge |
 
 Each chunk is independently shippable and reviewable. The pattern
-established in chunk B is mechanically applied to C/D/E.
+established in chunk B is mechanically applied to C/D/E. Frontend
+rewiring (consuming `{ items, pageInfo }`) happens *within* each
+clinical chunk B–E so each adopter is fully end-to-end before
+moving on; chunk F handles cross-cutting test-mock fidelity and
+the merge-prep pass.
