@@ -243,11 +243,13 @@ data class ProblemResponse(
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ProblemListResponse(
     val items: List<ProblemResponse>,
+    val pageInfo: com.medcore.platform.api.PageInfoDto,
 ) {
     companion object {
         fun from(result: ListPatientProblemsResult): ProblemListResponse =
             ProblemListResponse(
                 items = result.items.map { ProblemResponse.from(it) },
+                pageInfo = com.medcore.platform.api.PageInfoDto.from(result.pageInfo),
             )
     }
 }

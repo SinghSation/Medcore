@@ -66,4 +66,36 @@ enum class ProblemStatus {
     INACTIVE,
     RESOLVED,
     ENTERED_IN_ERROR,
+    ;
+
+    /**
+     * Status-priority for ADR-009 cursor pagination.
+     *
+     * Normative mapping (ADR-009 §2.5 — load-bearing):
+     *   ACTIVE = 0, INACTIVE = 1, RESOLVED = 2, ENTERED_IN_ERROR = 3.
+     *
+     * Problems use the full 0–3 spectrum. Mirror of
+     * [com.medcore.clinical.allergy.model.AllergyStatus.priority]
+     * (which skips `2` since allergies have no RESOLVED). Same
+     * integers across the platform so a `BucketedCursor.bucket`
+     * value has a stable interpretation regardless of resource;
+     * the cursor's `k` discriminator distinguishes resources.
+     *
+     * The same mapping is encoded in
+     * [com.medcore.clinical.problem.persistence.ProblemRepository]'s
+     * inline CASE expressions (JPQL) — keep them in sync.
+     *
+     * **RESOLVED ≠ INACTIVE** (ADR-009 §2.5 + 4E.2 invariant).
+     * The `2` slot is RESOLVED and must remain distinct from the
+     * `1` (INACTIVE) slot at every layer — DB query, Kotlin
+     * extension, cursor encoding, UI ordering. Drift here would
+     * collapse the load-bearing 4E.2 distinction.
+     */
+    val priority: Int
+        get() = when (this) {
+            ACTIVE -> 0
+            INACTIVE -> 1
+            RESOLVED -> 2
+            ENTERED_IN_ERROR -> 3
+        }
 }

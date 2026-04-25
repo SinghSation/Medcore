@@ -1,0 +1,31 @@
+-- V29__problem_pagination_index.sql — platform-pagination chunk E
+--
+-- Covering index for cursor-paginated reads on `clinical.problem`.
+-- ADR-009 §2.5 sort axis: `(status_priority, createdAt DESC, id DESC)`
+-- where status_priority is:
+--   ACTIVE = 0, INACTIVE = 1, RESOLVED = 2, ENTERED_IN_ERROR = 3.
+--
+-- Same shape as V28 for `clinical.allergy`, but problems use the
+-- full 0–3 priority range (RESOLVED occupies the `2` slot that
+-- allergies leave empty).
+--
+-- The cursor walk's WHERE clause uses inline CASE expressions
+-- to compute status_priority — see
+-- `ProblemRepository.findFirstPage` / `findAfter` for the JPQL.
+--
+-- ### Why a fresh index
+--
+-- V25 already shipped `(tenant_id, patient_id, status)`. Adding
+-- created_at + id as a SUPERSET index here lets PG resolve
+-- cursor walks directly. The original V25 index becomes a
+-- helper for `countByTenantIdAndPatientIdAndStatus`. Same
+-- pattern as V28 for allergies.
+--
+-- ### Rollback
+--
+-- `DROP INDEX IF EXISTS clinical.ix_problem_pagination;` —
+-- pagination falls back to a sort scan, correct but slower.
+-- Reversible.
+
+CREATE INDEX IF NOT EXISTS ix_problem_pagination
+    ON clinical.problem (tenant_id, patient_id, status, created_at, id);

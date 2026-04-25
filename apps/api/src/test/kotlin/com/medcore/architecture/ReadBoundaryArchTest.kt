@@ -154,8 +154,6 @@ class ReadBoundaryArchTest {
             // tenant-onboarding policy). If this changes, a
             // future slice can paginate it under the substrate.
             "MembershipListResponse",
-            // Migrating in chunk E.
-            "ProblemListResponse",
         )
     }
 }

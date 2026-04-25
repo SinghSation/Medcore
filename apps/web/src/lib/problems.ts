@@ -51,6 +51,7 @@ export interface Problem {
 
 export interface ProblemList {
   items: Problem[]
+  pageInfo: import('./pagination').PageInfo
 }
 
 export interface ListPatientProblemsParams {

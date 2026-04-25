@@ -213,8 +213,15 @@ class ProblemController(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
         @PathVariable patientId: UUID,
+        @org.springframework.web.bind.annotation.RequestParam(name = "pageSize", required = false) pageSize: Int?,
+        @org.springframework.web.bind.annotation.RequestParam(name = "cursor", required = false) cursor: String?,
     ): ResponseEntity<ApiResponse<ProblemListResponse>> {
-        val command = ListPatientProblemsCommand(slug = slug, patientId = patientId)
+        val pageRequest = com.medcore.platform.read.pagination.PageRequest.fromQueryParams(
+            pageSize = pageSize, cursor = cursor,
+        )
+        val command = ListPatientProblemsCommand(
+            slug = slug, patientId = patientId, pageRequest = pageRequest,
+        )
         val context = WriteContext(principal = principal, idempotencyKey = null)
         val result = listPatientProblemsGate.apply(command, context) { cmd ->
             listPatientProblemsHandler.handle(cmd, context)

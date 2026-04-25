@@ -19,7 +19,8 @@ import org.springframework.stereotype.Component
  *
  * ### Audit-row shape contract (NORMATIVE)
  *
- * **Success — inside the ReadGate tx:**
+ * **Success — inside the ReadGate tx (paginated as of
+ * platform-pagination chunk E, ADR-009 §2.7):**
  *   - action        = CLINICAL_PROBLEM_LIST_ACCESSED
  *   - actor_type    = USER
  *   - actor_id      = caller userId
@@ -27,7 +28,12 @@ import org.springframework.stereotype.Component
  *   - resource_type = "clinical.problem"
  *   - resource_id   = null (list — no single target row)
  *   - outcome       = SUCCESS
- *   - reason        = "intent:clinical.problem.list|count:N"
+ *   - reason        = "intent:clinical.problem.list|count:N|page_size:P|has_next:bool"
+ *
+ * `count` is per-page rows (NOT total). Multi-page disclosures
+ * emit one row per page. Aggregating `count` over a triple
+ * `(actor_id, resource_type, request_id)` sums to total
+ * disclosure (ADR-009 §2.7).
  *
  * **Denial — outside tx:**
  *   - action        = AUTHZ_READ_DENIED
@@ -67,6 +73,13 @@ class ListPatientProblemsAuditor(
         val tenantId = patientRepository.findById(command.patientId)
             .orElse(null)
             ?.tenantId
+        // ADR-009 §2.7: per-page count + page_size + has_next.
+        val reason = buildString {
+            append(INTENT_SLUG)
+            append("|count:").append(result.items.size)
+            append("|page_size:").append(command.pageRequest.pageSize)
+            append("|has_next:").append(result.pageInfo.hasNextPage)
+        }
         auditWriter.write(
             AuditEventCommand(
                 action = AuditAction.CLINICAL_PROBLEM_LIST_ACCESSED,
@@ -76,7 +89,7 @@ class ListPatientProblemsAuditor(
                 resourceType = RESOURCE_TYPE,
                 resourceId = null,
                 outcome = AuditOutcome.SUCCESS,
-                reason = "$INTENT_SLUG|count:${result.items.size}",
+                reason = reason,
             ),
         )
     }

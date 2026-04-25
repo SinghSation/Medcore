@@ -513,7 +513,11 @@ class ProblemIntegrationTest {
         assertThat(items[3]["id"]).isEqualTo(p4.toString())
 
         val audit = auditRows("clinical.problem.list_accessed").single()
-        assertThat(audit["reason"]).isEqualTo("intent:clinical.problem.list|count:4")
+        // ADR-009 §2.7: per-page count + page_size + has_next.
+        assertThat(audit["reason"])
+            .isEqualTo(
+                "intent:clinical.problem.list|count:4|page_size:50|has_next:false",
+            )
         assertThat(audit["resource_type"]).isEqualTo("clinical.problem")
         assertThat(audit["resource_id"]).isNull()
 
@@ -529,7 +533,125 @@ class ProblemIntegrationTest {
         val emptyItems = ((emptyResponse.body!!["data"] as Map<String, Any>)["items"]) as List<*>
         assertThat(emptyItems).isEmpty()
         val emptyAudit = auditRows("clinical.problem.list_accessed").single()
-        assertThat(emptyAudit["reason"]).isEqualTo("intent:clinical.problem.list|count:0")
+        assertThat(emptyAudit["reason"])
+            .isEqualTo(
+                "intent:clinical.problem.list|count:0|page_size:50|has_next:false",
+            )
+    }
+
+    // ========================================================================
+    // Pagination (chunk E — ADR-009; full 4-bucket BucketedCursor walk)
+    // ========================================================================
+
+    @Test
+    fun `pageSize=2 walks across all 4 status buckets correctly`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        // Seed 4 problems, transition each so all four status
+        // buckets are populated exactly once. Bucket order:
+        // ACTIVE (0), INACTIVE (1), RESOLVED (2),
+        // ENTERED_IN_ERROR (3) — full ADR-009 §2.5 spectrum.
+        val (p1, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Asthma"}""")
+        val (p2, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Migraine"}""")
+        val (p3, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Bronchitis 2019"}""")
+        val (p4, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Wrong-entry"}""")
+        // p1 stays ACTIVE; p2 → INACTIVE; p3 → RESOLVED; p4 → ENTERED_IN_ERROR.
+        patch("alice", "acme-health", patientId, p2, ifMatch = 0L,
+            body = """{"status":"INACTIVE"}""")
+        patch("alice", "acme-health", patientId, p3, ifMatch = 0L,
+            body = """{"status":"RESOLVED"}""")
+        patch("alice", "acme-health", patientId, p4, ifMatch = 0L,
+            body = """{"status":"ENTERED_IN_ERROR"}""")
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        // Page 1: ACTIVE + INACTIVE (buckets 0, 1).
+        val firstResp = getList("alice", "acme-health", patientId, pageSize = 2)
+        assertThat(firstResp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val firstData = firstResp.body!!["data"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val firstItems = firstData["items"] as List<Map<String, Any>>
+        assertThat(firstItems).hasSize(2)
+        assertThat(firstItems[0]["id"]).isEqualTo(p1.toString())
+        assertThat(firstItems[0]["status"]).isEqualTo("ACTIVE")
+        assertThat(firstItems[1]["id"]).isEqualTo(p2.toString())
+        assertThat(firstItems[1]["status"]).isEqualTo("INACTIVE")
+        @Suppress("UNCHECKED_CAST")
+        val firstPageInfo = firstData["pageInfo"] as Map<String, Any?>
+        assertThat(firstPageInfo["hasNextPage"]).isEqualTo(true)
+        val cursor1 = firstPageInfo["nextCursor"] as String
+        assertThat(cursor1).isNotBlank
+        assertThat(cursor1).doesNotContain("clinical")
+
+        // Page 2: cursor walks INTO RESOLVED + ENTERED_IN_ERROR
+        // (buckets 2, 3 — load-bearing RESOLVED ≠ INACTIVE
+        // distinction preserved across the page boundary).
+        val secondResp = getList(
+            "alice", "acme-health", patientId,
+            pageSize = 2, cursor = cursor1,
+        )
+        assertThat(secondResp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val secondData = secondResp.body!!["data"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val secondItems = secondData["items"] as List<Map<String, Any>>
+        assertThat(secondItems).hasSize(2)
+        assertThat(secondItems[0]["id"]).isEqualTo(p3.toString())
+        assertThat(secondItems[0]["status"]).isEqualTo("RESOLVED")
+        assertThat(secondItems[1]["id"]).isEqualTo(p4.toString())
+        assertThat(secondItems[1]["status"]).isEqualTo("ENTERED_IN_ERROR")
+        @Suppress("UNCHECKED_CAST")
+        val secondPageInfo = secondData["pageInfo"] as Map<String, Any?>
+        assertThat(secondPageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(secondPageInfo["nextCursor"]).isNull()
+
+        // Two audit rows, one per page-fetch.
+        val rows = auditRows("clinical.problem.list_accessed")
+        assertThat(rows).hasSize(2)
+        assertThat(rows[0]["reason"])
+            .isEqualTo(
+                "intent:clinical.problem.list|count:2|page_size:2|has_next:true",
+            )
+        assertThat(rows[1]["reason"])
+            .isEqualTo(
+                "intent:clinical.problem.list|count:2|page_size:2|has_next:false",
+            )
+    }
+
+    @Test
+    fun `pageSize=0 returns 422 out_of_range`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+
+        val resp = getList("alice", "acme-health", patientId, pageSize = 0)
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("pageSize")
+            assertThat(err["code"]).isEqualTo("out_of_range")
+        }
+    }
+
+    @Test
+    fun `malformed cursor returns 422 cursor|malformed`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+
+        val resp = getList(
+            "alice", "acme-health", patientId,
+            pageSize = 50, cursor = "!!not-a-valid-cursor!!",
+        )
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("cursor")
+            assertThat(err["code"]).isEqualTo("malformed")
+        }
     }
 
     // ========================================================================
@@ -675,12 +797,18 @@ class ProblemIntegrationTest {
         subject: String,
         slug: String,
         patientId: UUID,
+        pageSize: Int? = null,
+        cursor: String? = null,
     ): ResponseEntity<Map<String, Any>> {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
+        val query = buildList {
+            if (pageSize != null) add("pageSize=$pageSize")
+            if (cursor != null) add("cursor=${java.net.URLEncoder.encode(cursor, "UTF-8")}")
+        }.joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
         return rest.exchange(
-            "/api/v1/tenants/$slug/patients/$patientId/problems",
+            "/api/v1/tenants/$slug/patients/$patientId/problems$query",
             HttpMethod.GET,
             HttpEntity<Void>(headers),
             Map::class.java,
