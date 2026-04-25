@@ -20,17 +20,18 @@ import org.springframework.data.jpa.repository.Query
  * ### Sort axis
  *
  * `(status_priority, createdAt DESC, id DESC)` per ADR-009 §2.5.
- * `status_priority` is computed inline via JPQL CASE:
- *   ACTIVE = 0, INACTIVE = 1, RESOLVED = 2, ENTERED_IN_ERROR = 3.
- *
- * The mapping is locked in three places:
- *   - The DB query CASE (here)
- *   - [com.medcore.clinical.problem.model.ProblemStatus.priority] (Kotlin)
- *   - The cursor's `bucket` field
+ * `status_priority` is the SMALLINT column added in V29 — a
+ * `GENERATED ALWAYS AS (CASE status …) STORED` mirror of `status`
+ * with the platform-wide priority mapping (ACTIVE = 0,
+ * INACTIVE = 1, RESOLVED = 2, ENTERED_IN_ERROR = 3). Maintained
+ * by PG; the application never writes it. Same numeric mapping
+ * as [com.medcore.clinical.problem.model.ProblemStatus.priority]
+ * — adding a new enum value requires updating both.
  *
  * **RESOLVED ≠ INACTIVE** is load-bearing. RESOLVED occupies
- * the `2` slot — distinct from INACTIVE's `1`. Drift here would
- * collapse the 4E.2 invariant.
+ * the `2` slot — distinct from INACTIVE's `1`. The generated
+ * column encodes the distinction in the DB itself; drift here
+ * would collapse the 4E.2 invariant.
  *
  * ### Cursor walk semantics
  *
@@ -41,11 +42,13 @@ import org.springframework.data.jpa.repository.Query
  *   OR `bucket = b_last AND createdAt < ts_last` — same bucket, older
  *   OR `bucket = b_last AND createdAt = ts_last AND id < id_last` — tiebreak
  *
- * V29's covering index `(tenant_id, patient_id, status,
- * created_at, id)` provides the prefix; the bucket comparison
- * is on the computed CASE so the planner may need a sort-then-
- * filter step at scale. For typical patient sizes this is
- * negligible.
+ * V29's covering index `(tenant_id, patient_id, status_priority,
+ * created_at, id)` matches the ORDER BY one-for-one — PG can
+ * resolve the cursor walk as a single index scan with no Sort
+ * step, regardless of patient size. The earlier raw-status
+ * index could not satisfy the ORDER BY because Hibernate stores
+ * the enum as TEXT and PG sorted it alphabetically rather than
+ * by priority; switching to a generated column closes that gap.
  */
 interface ProblemRepository : JpaRepository<ProblemEntity, UUID> {
 
@@ -61,15 +64,9 @@ interface ProblemRepository : JpaRepository<ProblemEntity, UUID> {
         SELECT p FROM ProblemEntity p
          WHERE p.tenantId = :tenantId
            AND p.patientId = :patientId
-         ORDER BY
-           CASE p.status
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.ACTIVE THEN 0
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.INACTIVE THEN 1
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.RESOLVED THEN 2
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.ENTERED_IN_ERROR THEN 3
-           END,
-           p.createdAt DESC,
-           p.id DESC
+         ORDER BY p.statusPriority,
+                  p.createdAt DESC,
+                  p.id DESC
         """,
     )
     fun findFirstPage(
@@ -81,8 +78,10 @@ interface ProblemRepository : JpaRepository<ProblemEntity, UUID> {
     /**
      * Cursor walk: rows strictly AFTER `(bucket, ts, id)` in
      * the `(bucket ASC, createdAt DESC, id DESC)` ordering.
-     * Three CASE expressions encode the same priority mapping
-     * — keep them aligned with `ProblemStatus.priority`.
+     * Compares the cursor's `:bucket` directly against
+     * `p.statusPriority` (V29 generated column) so PG can
+     * resolve the walk via the matching covering index with
+     * no Sort step.
      */
     @Query(
         """
@@ -90,39 +89,13 @@ interface ProblemRepository : JpaRepository<ProblemEntity, UUID> {
          WHERE p.tenantId = :tenantId
            AND p.patientId = :patientId
            AND (
-             (CASE p.status
-                WHEN com.medcore.clinical.problem.model.ProblemStatus.ACTIVE THEN 0
-                WHEN com.medcore.clinical.problem.model.ProblemStatus.INACTIVE THEN 1
-                WHEN com.medcore.clinical.problem.model.ProblemStatus.RESOLVED THEN 2
-                WHEN com.medcore.clinical.problem.model.ProblemStatus.ENTERED_IN_ERROR THEN 3
-              END) > :bucket
-             OR
-             ((CASE p.status
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.ACTIVE THEN 0
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.INACTIVE THEN 1
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.RESOLVED THEN 2
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.ENTERED_IN_ERROR THEN 3
-               END) = :bucket
-              AND p.createdAt < :ts)
-             OR
-             ((CASE p.status
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.ACTIVE THEN 0
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.INACTIVE THEN 1
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.RESOLVED THEN 2
-                 WHEN com.medcore.clinical.problem.model.ProblemStatus.ENTERED_IN_ERROR THEN 3
-               END) = :bucket
-              AND p.createdAt = :ts
-              AND p.id < :id)
+             p.statusPriority > :bucket
+             OR (p.statusPriority = :bucket AND p.createdAt < :ts)
+             OR (p.statusPriority = :bucket AND p.createdAt = :ts AND p.id < :id)
            )
-         ORDER BY
-           CASE p.status
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.ACTIVE THEN 0
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.INACTIVE THEN 1
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.RESOLVED THEN 2
-             WHEN com.medcore.clinical.problem.model.ProblemStatus.ENTERED_IN_ERROR THEN 3
-           END,
-           p.createdAt DESC,
-           p.id DESC
+         ORDER BY p.statusPriority,
+                  p.createdAt DESC,
+                  p.id DESC
         """,
     )
     fun findAfter(

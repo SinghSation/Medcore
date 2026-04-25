@@ -2,22 +2,20 @@
 --
 -- Covering index for cursor-paginated reads on
 -- `clinical.encounter_note`. ADR-009 §2.5 sort axis:
--- `(createdAt DESC, id)` — newest first, with `id` as the
--- tie-break for equal-timestamp rows. The cursor walk's
+-- `(createdAt DESC, id DESC)` — newest first, with `id` as the
+-- DESC tiebreaker for equal-timestamp rows. The cursor walk's
 -- WHERE clause is:
 --
 --   WHERE tenant_id = :tenant_id
 --     AND encounter_id = :encounter_id
 --     AND ( created_at < :ts_last
---           OR ( created_at = :ts_last AND id > :id_last ) )
+--           OR ( created_at = :ts_last AND id < :id_last ) )
 --   ORDER BY created_at DESC, id DESC
 --   LIMIT :pageSize + 1
 --
 -- The composite index `(tenant_id, encounter_id, created_at,
 -- id)` lets PG index-scan the matching rows directly without a
--- secondary sort. `created_at` is stored ascending in the index
--- but PG can scan backward — explicit `DESC` storage is not
--- required.
+-- secondary sort.
 --
 -- ### Why this index, not the existing one
 --
@@ -30,11 +28,39 @@
 -- requires the (tenant, encounter, created_at, id) prefix to
 -- be index-resolvable for stable performance.
 --
+-- ### Online DDL posture (NORMATIVE — see ADR-006)
+--
+-- Team migration policy requires that index additions on
+-- potentially-large tables NOT take an `ACCESS EXCLUSIVE` lock
+-- against production traffic. The way Medcore satisfies this
+-- is **out of band** — NOT via Flyway:
+--
+--   1. Flyway migrations capture *schema intent* (this file)
+--      with a plain `CREATE INDEX` that is instant on the
+--      dev/CI empty tables and the pre-prod baseline.
+--   2. The production deploy runbook coordinates the actual
+--      online build via `CREATE INDEX CONCURRENTLY` (or
+--      `pg_repack`/`pgroll`-style tooling) executed by the
+--      operator session, not Flyway. The runbook then marks
+--      this migration as already-applied via
+--      `flyway_schema_history` so the dev definition stays
+--      consistent.
+--
+-- Why not `CREATE INDEX CONCURRENTLY` here directly: Flyway
+-- holds an open transaction on the schema-history connection
+-- across migrations even with `executeInTransaction=false`, and
+-- `CREATE INDEX CONCURRENTLY` waits for ALL preceding
+-- transactions to finish before it can proceed. The two
+-- compose into a deadlock. Issue tracked in Flyway upstream
+-- (#2999) and reproduced cleanly against this codebase on
+-- 2026-04-25; pivoting to runbook-driven online DDL is the
+-- documented fix.
+--
 -- ### Rollback
 --
 -- `DROP INDEX IF EXISTS clinical.ix_encounter_note_pagination;`
--- is safe — pagination falls back to a sort scan, which is
--- correct but slower at scale. Reversible.
+-- — pagination falls back to a sort scan, correct but slower
+-- at scale. Reversible.
 
 CREATE INDEX IF NOT EXISTS ix_encounter_note_pagination
     ON clinical.encounter_note (tenant_id, encounter_id, created_at, id);

@@ -32,6 +32,16 @@
 -- slice can re-evaluate (e.g., introduce a separate "scheduled
 -- list" surface or coalesce on the wire).
 --
+-- ### Online DDL posture (NORMATIVE — see ADR-006 + V26 KDoc)
+--
+-- The Flyway migration captures schema *intent* with a plain
+-- `CREATE INDEX` (instant on dev/CI/pre-prod). Production
+-- deployments coordinate the actual online build via
+-- `CREATE INDEX CONCURRENTLY` executed by the operator
+-- session, then mark the migration applied in
+-- `flyway_schema_history`. Rationale + reproduction of the
+-- Flyway↔CONCURRENTLY deadlock is documented in V26.
+--
 -- ### Rollback
 --
 -- `DROP INDEX IF EXISTS clinical.ix_encounter_pagination;` —
