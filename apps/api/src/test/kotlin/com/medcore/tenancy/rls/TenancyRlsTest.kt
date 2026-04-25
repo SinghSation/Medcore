@@ -55,6 +55,8 @@ class TenancyRlsTest {
         superJdbc = JdbcTemplate(dataSource)
         superJdbc.update("DELETE FROM audit.audit_event")
         superJdbc.update("DELETE FROM clinical.patient_mrn_counter")
+        superJdbc.update("DELETE FROM clinical.problem")
+        superJdbc.update("DELETE FROM clinical.allergy")
         superJdbc.update("DELETE FROM clinical.patient_identifier")
         superJdbc.update("DELETE FROM clinical.patient")
         superJdbc.update("DELETE FROM tenancy.tenant_membership")

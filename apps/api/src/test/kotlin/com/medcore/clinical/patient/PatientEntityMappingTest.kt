@@ -78,6 +78,8 @@ class PatientEntityMappingTest {
     fun seed() {
         val admin = JdbcTemplate(adminDataSource)
         admin.update("DELETE FROM clinical.patient_mrn_counter")
+        admin.update("DELETE FROM clinical.problem")
+        admin.update("DELETE FROM clinical.allergy")
         admin.update("DELETE FROM clinical.patient_identifier")
         admin.update("DELETE FROM clinical.patient")
         admin.update("DELETE FROM audit.audit_event")

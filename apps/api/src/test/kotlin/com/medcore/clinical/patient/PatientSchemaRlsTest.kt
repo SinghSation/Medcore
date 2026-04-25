@@ -76,6 +76,8 @@ class PatientSchemaRlsTest {
     fun seed() {
         val adminJdbc = JdbcTemplate(adminDataSource)
         adminJdbc.update("DELETE FROM clinical.patient_mrn_counter")
+        adminJdbc.update("DELETE FROM clinical.problem")
+        adminJdbc.update("DELETE FROM clinical.allergy")
         adminJdbc.update("DELETE FROM clinical.patient_identifier")
         adminJdbc.update("DELETE FROM clinical.patient")
         adminJdbc.update("DELETE FROM audit.audit_event")
