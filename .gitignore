@@ -137,6 +137,13 @@ test-results/
 playwright-report/
 *.lcov
 
+# --- Claude Code (agent toolchain) -------------------------------------------
+# .claude/ is partially tracked — skills/ and agents/ are project-shared
+# content. Per-user preferences and runtime locks must NOT be committed.
+.claude/settings.json
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # --- Misc --------------------------------------------------------------------
 tmp/
 temp/
