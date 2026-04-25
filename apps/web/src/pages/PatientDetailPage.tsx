@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
+import { AllergyBanner } from '@/components/AllergyBanner'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -276,6 +277,10 @@ export function PatientDetailPage(): React.JSX.Element {
               </Section>
             </CardContent>
           </Card>
+        )}
+
+        {patient && (
+          <AllergyBanner tenantSlug={slug!} patientId={patient.id} />
         )}
 
         {patient && (

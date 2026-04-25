@@ -91,6 +91,7 @@ class MedcoreApiApplicationTests {
                 Row("21", "V21__clinical_encounter_lifecycle.sql", true),
                 Row("22", "V22__clinical_encounter_one_in_progress_per_patient.sql", true),
                 Row("23", "V23__clinical_encounter_note_amendment_integrity.sql", true),
+                Row("24", "V24__clinical_allergy.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",

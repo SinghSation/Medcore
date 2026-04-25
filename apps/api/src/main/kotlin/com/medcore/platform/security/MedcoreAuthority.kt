@@ -59,7 +59,7 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     ENCOUNTER_READ("MEDCORE_ENCOUNTER_READ"),
     ENCOUNTER_WRITE("MEDCORE_ENCOUNTER_WRITE"),
 
-    // --- Clinical-note authorities (Phase 4D.1 + 4D.5) ---
+    // --- Clinical-note authorities (Phase 4D.1 + 4D.5 + 4D.6) ---
     // Role map:
     //   OWNER + ADMIN — NOTE_READ + NOTE_WRITE + NOTE_SIGN
     //   MEMBER        — NOTE_READ only
@@ -72,11 +72,29 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     // change (Rule 07 forward-only). For MVP, both OWNER and
     // ADMIN hold NOTE_SIGN; MEMBER does not.
     //
-    // Amendments (NOTE_AMEND) remain a carry-forward and will
-    // split NOTE_WRITE further when the amendment workflow lands.
+    // Amendments (Phase 4D.6) reuse NOTE_WRITE per the locked
+    // 4D.6 plan (Q3) — a separate NOTE_AMEND authority would only
+    // be introduced when a clinical-role policy demands distinct
+    // gating (e.g., "only physicians may amend").
     NOTE_READ("MEDCORE_NOTE_READ"),
     NOTE_WRITE("MEDCORE_NOTE_WRITE"),
     NOTE_SIGN("MEDCORE_NOTE_SIGN"),
+
+    // --- Allergy authorities (Phase 4E.1) ---
+    // Role map:
+    //   OWNER + ADMIN — ALLERGY_READ + ALLERGY_WRITE
+    //   MEMBER        — ALLERGY_READ only
+    //
+    // First longitudinal patient-level dataset. Same shape as
+    // ENCOUNTER_* and NOTE_* — read for everyone, write gated to
+    // tenant-admin roles. ALLERGY_WRITE is deliberately a
+    // distinct authority (NOT a reuse of PATIENT_UPDATE) per the
+    // locked 4E.1 plan (Q6): clinical safety data has its own
+    // operational lifecycle (deactivation, ENTERED_IN_ERROR
+    // workflow) and a separate authority avoids a future RBAC
+    // refactor when that lifecycle deepens.
+    ALLERGY_READ("MEDCORE_ALLERGY_READ"),
+    ALLERGY_WRITE("MEDCORE_ALLERGY_WRITE"),
 
     // --- System-scope (bootstrap, admin ops) ---
     /**

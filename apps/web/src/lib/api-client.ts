@@ -38,13 +38,21 @@ export interface ApiFetchOptions {
   body?: unknown
   tenantSlug?: string
   signal?: AbortSignal
+  /**
+   * Extra request headers (e.g., `If-Match` for PATCH). Merged
+   * AFTER the framework-managed headers (Accept,
+   * Content-Type, Authorization, X-Medcore-Tenant), so a caller
+   * can override any of them — but the only documented use is
+   * adding new headers, not overriding the auth/tenant pair.
+   */
+  headers?: Record<string, string>
 }
 
 export async function apiFetch<T>(
   path: string,
   options: ApiFetchOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, tenantSlug, signal } = options
+  const { method = 'GET', body, tenantSlug, signal, headers: extraHeaders } = options
 
   const headers = new Headers()
   headers.set('Accept', 'application/json')
@@ -57,6 +65,11 @@ export async function apiFetch<T>(
   }
   if (tenantSlug !== undefined) {
     headers.set('X-Medcore-Tenant', tenantSlug)
+  }
+  if (extraHeaders !== undefined) {
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      headers.set(k, v)
+    }
   }
 
   const init: RequestInit = {

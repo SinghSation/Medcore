@@ -120,6 +120,10 @@ async function cascadeDeleteNonAuditTenantData(
   tenantId: string,
 ): Promise<void> {
   await client.query(
+    `DELETE FROM clinical.allergy WHERE tenant_id = $1`,
+    [tenantId],
+  )
+  await client.query(
     `DELETE FROM clinical.encounter_note WHERE tenant_id = $1`,
     [tenantId],
   )
@@ -185,6 +189,14 @@ export async function resetEncountersForE2eTenant(): Promise<void> {
       return
     }
     const tenantId = existing.rows[0].id
+    // Allergies first — V24 FK to patient is RESTRICT, but we
+    // never delete patients here. Still, ordering allergies
+    // before encounter_note keeps a future "delete patients
+    // too" addition safe by inspection.
+    await client.query(
+      `DELETE FROM clinical.allergy WHERE tenant_id = $1`,
+      [tenantId],
+    )
     await client.query(
       `DELETE FROM clinical.encounter_note WHERE tenant_id = $1`,
       [tenantId],
