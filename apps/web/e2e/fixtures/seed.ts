@@ -119,6 +119,16 @@ async function cascadeDeleteNonAuditTenantData(
   client: Client,
   tenantId: string,
 ): Promise<void> {
+  // Problems before allergies — both FK to clinical.patient
+  // (default RESTRICT). 4E.2 introduced the problem table; the
+  // ordering between problem and allergy is not load-bearing
+  // (neither references the other), but keeping a deterministic
+  // order matches the per-test cleanup discipline in the API
+  // integration tests.
+  await client.query(
+    `DELETE FROM clinical.problem WHERE tenant_id = $1`,
+    [tenantId],
+  )
   await client.query(
     `DELETE FROM clinical.allergy WHERE tenant_id = $1`,
     [tenantId],
@@ -189,10 +199,17 @@ export async function resetEncountersForE2eTenant(): Promise<void> {
       return
     }
     const tenantId = existing.rows[0].id
-    // Allergies first — V24 FK to patient is RESTRICT, but we
-    // never delete patients here. Still, ordering allergies
-    // before encounter_note keeps a future "delete patients
-    // too" addition safe by inspection.
+    // Problems + allergies first — both FK to patient
+    // (RESTRICT). We never delete patients here, but
+    // ordering them before encounter_note keeps a future
+    // "delete patients too" addition safe by inspection.
+    // 4E.2 added clinical.problem (V25); the ordering
+    // between problem and allergy is independent (neither
+    // references the other).
+    await client.query(
+      `DELETE FROM clinical.problem WHERE tenant_id = $1`,
+      [tenantId],
+    )
     await client.query(
       `DELETE FROM clinical.allergy WHERE tenant_id = $1`,
       [tenantId],
