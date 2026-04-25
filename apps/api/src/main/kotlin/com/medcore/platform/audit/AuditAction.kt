@@ -785,6 +785,179 @@ enum class AuditAction(val code: String) {
      */
     CLINICAL_ALLERGY_LIST_ACCESSED("clinical.allergy.list_accessed"),
 
+    // --- Phase 4E.2: clinical problems / conditions (longitudinal data) ---
+    /**
+     * Emitted on the SUCCESS path of
+     * `POST /api/v1/tenants/{slug}/patients/{patientId}/problems`
+     * when an OWNER/ADMIN records a new problem on a patient
+     * (Phase 4E.2). Second longitudinal patient-level clinical
+     * write action in Medcore (after [CLINICAL_ALLERGY_ADDED]).
+     *
+     * Normative shape contract lives on
+     * `com.medcore.clinical.problem.write.AddProblemAuditor`:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.problem"`
+     *   - `resource_id`   = newly-minted problem UUID
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.problem.add"` —
+     *     no severity token (severity is NULLABLE per locked
+     *     Q3, so the analogue to allergy's
+     *     `severity:<CLOSED_ENUM>` does not generalise).
+     *
+     * **PHI discipline.** The condition text is PHI and NEVER
+     * appears in the reason slug. Severity, when present, is a
+     * closed-enum value (MILD / MODERATE / SEVERE) but is
+     * deliberately NOT embedded in the action reason because
+     * it can be NULL — encoding "severity:NONE" as a sentinel
+     * would muddy compliance queries. Use `resource_id` →
+     * `clinical.problem` lookup for forensic narrowing.
+     *
+     * No no-op suppression: an add is always a persisted INSERT.
+     */
+    CLINICAL_PROBLEM_ADDED("clinical.problem.added"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `PATCH /api/v1/tenants/{slug}/patients/{patientId}/problems/{id}`
+     * when an OWNER/ADMIN updates a problem's mutable fields
+     * (severity, onset_date, abatement_date) or transitions
+     * status `ACTIVE ↔ INACTIVE` only (Phase 4E.2).
+     *
+     * **NOT used for status transitions to `RESOLVED` or
+     * `ENTERED_IN_ERROR`** — those emit
+     * [CLINICAL_PROBLEM_RESOLVED] and [CLINICAL_PROBLEM_REVOKED]
+     * respectively. The three-action split is normative: a
+     * compliance reviewer must distinguish "the patient's
+     * condition no longer exists" (RESOLVED — clinical
+     * outcome) from "the patient's condition state was
+     * refined" (UPDATED — clinical refinement) from "the
+     * record was a mistake" (REVOKED — data correction).
+     * RESOLVED ≠ INACTIVE: an INACTIVE-bound transition
+     * stays here.
+     *
+     * Normative shape contract lives on
+     * `com.medcore.clinical.problem.write.UpdateProblemAuditor`:
+     *   - `resource_type` = `"clinical.problem"`
+     *   - `resource_id`   = target problem UUID
+     *   - `reason`        = `"intent:clinical.problem.update|fields:<comma-sep>"`
+     *     and, when the patch includes a status transition,
+     *     `"|status_from:<X>|status_to:<Y>"` is appended (where
+     *     `<Y>` ∈ ACTIVE / INACTIVE only — RESOLVED + ENTERED_IN_ERROR
+     *     are routed to the dedicated actions below).
+     *
+     * **PHI discipline.** Field NAMES (closed set: `severity`,
+     * `onset_date`, `abatement_date`, `status`) and closed-enum
+     * status tokens only. condition_text is immutable post-
+     * create per locked Q7 and therefore cannot appear in the
+     * fields list. Old/new value diffing waits for the Phase 7
+     * audit-schema-evolution ADR.
+     *
+     * Suppressed for no-op writes (PATCH with every field
+     * unchanged) per the 3J.2 / 4A.2 / 4E.1 precedent.
+     */
+    CLINICAL_PROBLEM_UPDATED("clinical.problem.updated"),
+
+    /**
+     * Emitted on the SUCCESS path of a problem status transition
+     * to `RESOLVED` — the clinical-outcome closure path
+     * (Phase 4E.2). RESOLVED ≠ INACTIVE: this action fires
+     * **only** for the "the condition no longer exists"
+     * transition, not for "the condition is currently
+     * dormant."
+     *
+     * Distinct action (not a flag inside [CLINICAL_PROBLEM_UPDATED])
+     * because clinical outcome reporting is a high-value
+     * compliance + analytics surface — "how many problems
+     * resolved in Q1?" is a routine query, and it MUST NOT
+     * collide with INACTIVE transitions or refinement updates.
+     *
+     * Normative shape contract lives on
+     * `com.medcore.clinical.problem.write.UpdateProblemAuditor`
+     * (same auditor — three-way outcome dispatch from the
+     * handler's `UpdateProblemOutcome.kind`):
+     *   - `resource_type` = `"clinical.problem"`
+     *   - `resource_id`   = target problem UUID
+     *   - `reason`        = `"intent:clinical.problem.resolve|prior_status:<X>"`
+     *     where `<X>` ∈ ACTIVE / INACTIVE.
+     *
+     * **`prior_status` token is normative.** A direct
+     * INACTIVE → RESOLVED transition is a different clinical
+     * narrative ("we re-classified a dormant condition as
+     * fully resolved") from ACTIVE → RESOLVED ("an active
+     * condition was treated to resolution"). Forensic queries
+     * can isolate either narrative without joining historical
+     * state.
+     *
+     * Suppressed for idempotent retries on already-RESOLVED
+     * rows (handler returns `changed = false`).
+     */
+    CLINICAL_PROBLEM_RESOLVED("clinical.problem.resolved"),
+
+    /**
+     * Emitted on the SUCCESS path of a problem status
+     * transition to `ENTERED_IN_ERROR` — the soft-delete /
+     * retraction mechanism in 4E.2. Mirrors
+     * [CLINICAL_ALLERGY_REVOKED] discipline byte-for-byte.
+     *
+     * Action verb matches 4A.3 + 4E.1 `revoked` discipline:
+     * revocation is a soft, terminal lifecycle transition
+     * (not a row delete). The record persists for audit +
+     * clinical-history integrity; only its `status` changes.
+     *
+     * Normative shape contract lives on
+     * `com.medcore.clinical.problem.write.UpdateProblemAuditor`:
+     *   - `resource_type` = `"clinical.problem"`
+     *   - `resource_id`   = target problem UUID (soft-deleted)
+     *   - `reason`        = `"intent:clinical.problem.revoke|prior_status:<X>"`
+     *
+     * **`prior_status` is a closed-enum token** (ACTIVE /
+     * INACTIVE / RESOLVED — ENTERED_IN_ERROR is terminal so
+     * it cannot be the prior status). Forensic queries can
+     * isolate "ACTIVE-to-ENTERED_IN_ERROR retractions"
+     * (stronger signal of a recording error) from
+     * "RESOLVED-to-ENTERED_IN_ERROR" (rarer; "we got the
+     * resolution itself wrong").
+     *
+     * Suppressed for idempotent retries on already-
+     * ENTERED_IN_ERROR rows (handler returns `changed = false`).
+     */
+    CLINICAL_PROBLEM_REVOKED("clinical.problem.revoked"),
+
+    /**
+     * Emitted on the SUCCESS path of
+     * `GET /api/v1/tenants/{slug}/patients/{patientId}/problems`
+     * when the caller successfully lists problems for a patient
+     * (Phase 4E.2).
+     *
+     * Bulk-disclosure read. Single-problem GET is not a 4E.2
+     * surface (the chart shows the full list); a future single-
+     * resource GET would emit a sibling `CLINICAL_PROBLEM_ACCESSED`
+     * action.
+     *
+     * Normative shape contract lives on
+     * `com.medcore.clinical.problem.read.ListPatientProblemsAuditor`:
+     *   - `actor_type`    = USER
+     *   - `actor_id`      = caller userId
+     *   - `tenant_id`     = target tenant UUID
+     *   - `resource_type` = `"clinical.problem"`
+     *   - `resource_id`   = null (list — no single target row)
+     *   - `outcome`       = SUCCESS
+     *   - `reason`        = `"intent:clinical.problem.list|count:N"`
+     *
+     * **PHI discipline.** Reason carries ONLY the fixed intent
+     * token + one bounded integer (`count`). Patient UUID,
+     * condition text, severity NEVER appear. Forensic narrowing
+     * goes through `request_id` → structured-log join (same
+     * pattern as 4B.1 / 4D.1 / 4E.1).
+     *
+     * One row per list call, including `count = 0`. A zero-row
+     * problem list ("No problems recorded") IS a disclosure
+     * event.
+     */
+    CLINICAL_PROBLEM_LIST_ACCESSED("clinical.problem.list_accessed"),
+
     /**
      * Emitted when a [com.medcore.platform.read.ReadAuthzPolicy]
      * refuses a read (Phase 4A.4). Sister entry to

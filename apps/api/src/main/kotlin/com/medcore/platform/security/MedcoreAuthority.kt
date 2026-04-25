@@ -96,6 +96,24 @@ enum class MedcoreAuthority(val role: String) : GrantedAuthority {
     ALLERGY_READ("MEDCORE_ALLERGY_READ"),
     ALLERGY_WRITE("MEDCORE_ALLERGY_WRITE"),
 
+    // --- Problem (clinical) authorities (Phase 4E.2) ---
+    // Role map:
+    //   OWNER + ADMIN — PROBLEM_READ + PROBLEM_WRITE
+    //   MEMBER        — PROBLEM_READ only
+    //
+    // Second longitudinal patient-level dataset, after allergies.
+    // Same shape as ALLERGY_*: read for every member (problem
+    // list is chart-context every viewer should see), write
+    // gated to tenant-admin roles. PROBLEM_WRITE is deliberately
+    // distinct from ALLERGY_WRITE per the locked 4E.2 plan
+    // (Q7-derived): different clinical lifecycle (RESOLVED is a
+    // problem-only state) and a separate authority avoids a
+    // future RBAC refactor when clinical-role differentiation
+    // (CLINICIAN / NURSE / STAFF) splits write rights asymmetrically
+    // across the two surfaces.
+    PROBLEM_READ("MEDCORE_PROBLEM_READ"),
+    PROBLEM_WRITE("MEDCORE_PROBLEM_WRITE"),
+
     // --- System-scope (bootstrap, admin ops) ---
     /**
      * Reserved for bootstrap / admin operations that must bypass
