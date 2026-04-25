@@ -2,6 +2,7 @@ package com.medcore.clinical.encounter.api
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.clinical.encounter.model.CancelReason
+import com.medcore.platform.api.PageInfoDto
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterNoteStatus
 import com.medcore.clinical.encounter.model.EncounterStatus
@@ -328,20 +329,5 @@ data class EncounterNoteListResponse(
     }
 }
 
-/**
- * Wire shape of the `pageInfo` field (ADR-009 §2.4). Mirrors
- * the substrate's [com.medcore.platform.read.pagination.PageInfo]
- * — carried as its own DTO so future per-resource extensions
- * (e.g., a `totalCount` opt-in for non-clinical surfaces)
- * don't ripple back into the platform substrate.
- */
-@JsonInclude(JsonInclude.Include.NON_NULL)
-data class PageInfoDto(
-    val hasNextPage: Boolean,
-    val nextCursor: String?,
-) {
-    companion object {
-        fun from(pi: com.medcore.platform.read.pagination.PageInfo): PageInfoDto =
-            PageInfoDto(hasNextPage = pi.hasNextPage, nextCursor = pi.nextCursor)
-    }
-}
+// PageInfoDto promoted to com.medcore.platform.api in chunk D
+// — see import at the top of this file.

@@ -243,11 +243,13 @@ data class AllergyResponse(
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AllergyListResponse(
     val items: List<AllergyResponse>,
+    val pageInfo: com.medcore.platform.api.PageInfoDto,
 ) {
     companion object {
         fun from(result: ListPatientAllergiesResult): AllergyListResponse =
             AllergyListResponse(
                 items = result.items.map { AllergyResponse.from(it) },
+                pageInfo = com.medcore.platform.api.PageInfoDto.from(result.pageInfo),
             )
     }
 }

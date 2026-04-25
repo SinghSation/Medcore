@@ -1,0 +1,37 @@
+-- V28__allergy_pagination_index.sql — platform-pagination chunk D
+--
+-- Covering index for cursor-paginated reads on `clinical.allergy`.
+-- ADR-009 §2.5 sort axis: `(status_priority, createdAt DESC, id DESC)`
+-- where status_priority is:
+--   ACTIVE = 0, INACTIVE = 1, ENTERED_IN_ERROR = 3
+-- (RESOLVED = 2 is reserved for problems; allergies skip it).
+--
+-- The cursor walk's WHERE clause uses inline CASE expressions
+-- to compute status_priority — see
+-- `AllergyRepository.findFirstPage` / `findAfter` for the full
+-- JPQL. PG can use the index prefix `(tenant_id, patient_id,
+-- status)` for filtering; the additional `(created_at, id)`
+-- columns let it sort within a status bucket without a separate
+-- sort step.
+--
+-- ### Why a fresh index, not extend V24's
+--
+-- V24 already shipped `(tenant_id, patient_id, status)`. Adding
+-- created_at + id requires either:
+--   (a) DROP + CREATE the original (forward-only-discipline
+--       violation per Rule 03 — V24's checksum would change)
+--   (b) Add a SUPERSET index (this migration)
+--
+-- Option (b) wins. PG's planner picks the most-specific covering
+-- index; the original `(tenant_id, patient_id, status)` becomes
+-- a smaller helper index for non-pagination queries (e.g., the
+-- `countByTenantIdAndPatientIdAndStatus` count helper).
+--
+-- ### Rollback
+--
+-- `DROP INDEX IF EXISTS clinical.ix_allergy_pagination;` —
+-- pagination falls back to a sort scan, correct but slower.
+-- Reversible.
+
+CREATE INDEX IF NOT EXISTS ix_allergy_pagination
+    ON clinical.allergy (tenant_id, patient_id, status, created_at, id);

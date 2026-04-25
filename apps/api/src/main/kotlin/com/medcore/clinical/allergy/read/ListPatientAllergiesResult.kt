@@ -1,17 +1,14 @@
 package com.medcore.clinical.allergy.read
 
 import com.medcore.clinical.allergy.write.AllergySnapshot
+import com.medcore.platform.read.pagination.PageResponse
 
 /**
- * Handler result for [ListPatientAllergiesCommand] (Phase 4E.1).
+ * Handler result for [ListPatientAllergiesCommand]
+ * (Phase 4E.1, paginated as of platform-pagination chunk D).
  *
- * Un-paginated list — no `totalCount` / `limit` / `offset`
- * envelope fields, consistent with
- * [com.medcore.clinical.encounter.read.ListPatientEncountersResult]
- * and [com.medcore.clinical.encounter.read.ListEncounterNotesResult].
- * Adding pagination is additive; existing clients ignoring new
- * fields continue to work.
+ * Wire envelope: `{ items, pageInfo }` per ADR-009 §2.4.
+ * `typealias` keeps the substrate as the single source of
+ * truth for envelope shape.
  */
-data class ListPatientAllergiesResult(
-    val items: List<AllergySnapshot>,
-)
+typealias ListPatientAllergiesResult = PageResponse<AllergySnapshot>

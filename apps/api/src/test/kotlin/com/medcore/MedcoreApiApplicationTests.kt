@@ -95,6 +95,7 @@ class MedcoreApiApplicationTests {
                 Row("25", "V25__clinical_problem.sql", true),
                 Row("26", "V26__encounter_note_pagination_index.sql", true),
                 Row("27", "V27__encounter_pagination_index.sql", true),
+                Row("28", "V28__allergy_pagination_index.sql", true),
             ),
             rows,
             "Flyway history MUST contain every shipped migration in order, all successful",
