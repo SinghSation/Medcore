@@ -350,6 +350,56 @@ class AmendNoteIntegrationTest {
     }
 
     // ========================================================================
+    // 14 — Cross-slice: amendment on FINISHED encounter can still be signed
+    //                   (4D.6 carve-out from the 4C.5 closed-encounter rule)
+    // ========================================================================
+
+    @Test
+    fun `amendment on FINISHED encounter — sign succeeds (200 SIGNED)`() {
+        val (userId, encounterId) = seedEncounter("alice", role = "OWNER")
+        val originalNoteId = createNote("alice", "acme-health", encounterId, "n1")
+        signNote("alice", "acme-health", encounterId, originalNoteId)
+        finishEncounter("alice", encounterId)
+        // Sanity: encounter is closed.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM clinical.encounter WHERE id = ?",
+                String::class.java, encounterId,
+            ),
+        ).isEqualTo("FINISHED")
+
+        // Amend on FINISHED — produces a DRAFT amendment.
+        val amendResp = postAmend(
+            "alice", "acme-health", encounterId, originalNoteId, "post-finish correction",
+        )
+        assertThat(amendResp.statusCode).isEqualTo(HttpStatus.CREATED)
+        @Suppress("UNCHECKED_CAST")
+        val amendmentId = UUID.fromString(
+            (amendResp.body!!["data"] as Map<String, Any>)["id"] as String,
+        )
+
+        // Sign the amendment — must succeed despite encounter being
+        // closed. This is the 4D.6 carve-out from 4C.5: amendments
+        // are exempt from the closed-encounter signing rule.
+        val signResp = postSign("alice", "acme-health", encounterId, amendmentId)
+        assertThat(signResp.statusCode).isEqualTo(HttpStatus.OK)
+        @Suppress("UNCHECKED_CAST")
+        val signed = signResp.body!!["data"] as Map<String, Any>
+        assertThat(signed["status"]).isEqualTo("SIGNED")
+        assertThat(signed["signedBy"]).isEqualTo(userId.toString())
+        assertThat(signed["amendsId"]).isEqualTo(originalNoteId.toString())
+
+        // Encounter status unchanged — signing the amendment does
+        // NOT reopen the encounter.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM clinical.encounter WHERE id = ?",
+                String::class.java, encounterId,
+            ),
+        ).isEqualTo("FINISHED")
+    }
+
+    // ========================================================================
     // 11 — Sibling amendments: multiple amendments on the same original
     // ========================================================================
 
