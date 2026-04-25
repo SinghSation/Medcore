@@ -71,6 +71,27 @@ import org.springframework.stereotype.Component
  * 'DRAFT'); a re-sign attempt that somehow reached DB would be
  * refused at the SQL layer even if this handler's 409 check
  * were bypassed.
+ *
+ * ### Closed-encounter rule (Phase 4C.5 + 4D.6 carve-out)
+ *
+ * - Non-amendment DRAFTs (`note.amendsId IS NULL`) on a closed
+ *   encounter (FINISHED / CANCELLED) → 409 `encounter_closed`.
+ *   The encounter itself is immutable post-close; new clinical
+ *   documentation belongs inside the encounter window.
+ * - Amendments (`note.amendsId IS NOT NULL`) → may be signed
+ *   regardless of the encounter's status. That carve-out is
+ *   the *entire reason* the 4D.6 amendment workflow exists:
+ *   to write SIGNED corrections to the legal record AFTER the
+ *   encounter has closed. Signing an amendment does NOT reopen
+ *   the parent encounter; the encounter stays in its current
+ *   closed state.
+ *
+ * The check sits AFTER the note load (not before) because the
+ * carve-out keys on `note.amendsId` — a column on the note row,
+ * not the encounter. Reordering does not change the 404 surface
+ * for cross-tenant or cross-encounter probes; it just lets us
+ * read `amendsId` before deciding whether the closed-encounter
+ * rule applies.
  */
 @Component
 class SignEncounterNoteHandler(
@@ -97,17 +118,36 @@ class SignEncounterNoteHandler(
             )
         }
 
-        // Phase 4C.5: drafts on a closed encounter cannot be
-        // signed. Signing happens during IN_PROGRESS; after
-        // FINISH / CANCEL the encounter is immutable.
-        if (encounter.status != EncounterStatus.IN_PROGRESS) {
-            throw WriteConflictException("encounter_closed")
-        }
-
         val note = encounterNoteRepository.findById(command.noteId).orElse(null)
             ?: throw EntityNotFoundException("note not found: ${command.noteId}")
         if (note.tenantId != tenant.id || note.encounterId != encounter.id) {
             throw EntityNotFoundException("note not found: ${command.noteId}")
+        }
+
+        // Phase 4C.5 closed-encounter rule, refined in Phase 4D.6:
+        //
+        //   - Non-amendment notes (`amendsId IS NULL`): may be
+        //     signed only while the encounter is IN_PROGRESS.
+        //     After FINISH / CANCEL the encounter is immutable
+        //     and a still-DRAFT regular note can never be signed.
+        //   - Amendments (`amendsId IS NOT NULL`): MAY be signed
+        //     regardless of the encounter's status. The whole
+        //     point of the 4D.6 amendment workflow is to write
+        //     SIGNED corrections to the legal record AFTER the
+        //     encounter window has closed. The encounter itself
+        //     stays in its current closed state — signing the
+        //     amendment does not reopen it.
+        //
+        // The carve-out is explicit and deterministic: it keys on
+        // a row column (`note.amendsId`), not on caller intent or
+        // a separate authority. Same `WriteConflictException`
+        // contract preserved for non-amendment closed-encounter
+        // attempts (`details.reason: encounter_closed`).
+        if (
+            encounter.status != EncounterStatus.IN_PROGRESS &&
+            note.amendsId == null
+        ) {
+            throw WriteConflictException("encounter_closed")
         }
 
         if (note.status == EncounterNoteStatus.SIGNED) {

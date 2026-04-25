@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -18,6 +18,7 @@ import {
   type CancelReason,
 } from '@/lib/encounters'
 import {
+  amendEncounterNote,
   createEncounterNote,
   listEncounterNotes,
   signEncounterNote,
@@ -172,6 +173,84 @@ export function EncounterDetailPage(): React.JSX.Element {
     signMutation.mutate(noteId)
   }
 
+  // --- Note amendments (Phase 4D.6) ---
+  //
+  // One-amendment-editor-at-a-time. `amendingNoteId` identifies
+  // which signed original is currently being amended; the
+  // editor textarea + save/cancel buttons live inside that
+  // row. Saving creates a NEW DRAFT note that references the
+  // original via amends_id; the list refetch threads it under
+  // the original.
+  //
+  // Amendments are signed via the existing 4D.5 sign mutation
+  // above — chunk B.5 carved out the closed-encounter rule for
+  // amendments, so the Sign button on a draft amendment works
+  // even when the parent encounter is FINISHED / CANCELLED.
+
+  const [amendingNoteId, setAmendingNoteId] = useState<string | null>(null)
+  const [amendDraft, setAmendDraft] = useState('')
+  const [amendError, setAmendError] = useState<string | null>(null)
+  const amendMutation = useMutation({
+    mutationFn: (vars: { noteId: string; body: string }) =>
+      amendEncounterNote({
+        tenantSlug: slug!,
+        encounterId: encounterId!,
+        noteId: vars.noteId,
+        body: vars.body,
+      }),
+    onSuccess: () => {
+      setAmendingNoteId(null)
+      setAmendDraft('')
+      setAmendError(null)
+      queryClient.invalidateQueries({
+        queryKey: ['notes', slug, encounterId],
+      })
+    },
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 403) {
+        setAmendError('You do not have authority to amend notes on this tenant.')
+      } else if (err instanceof ApiError && err.status === 409) {
+        const reason = extractConflictReason(err)
+        setAmendError(
+          reason === 'cannot_amend_unsigned_note'
+            ? 'The original note is no longer signed. Refresh to reconcile.'
+            : reason === 'cannot_amend_an_amendment'
+              ? 'Amendments cannot themselves be amended.'
+              : 'This amendment conflicts with the current note state.',
+        )
+        queryClient.invalidateQueries({
+          queryKey: ['notes', slug, encounterId],
+        })
+      } else {
+        setAmendError('Could not save amendment. Try again.')
+      }
+    },
+  })
+
+  function onStartAmend(noteId: string, originalBody: string): void {
+    setAmendError(null)
+    // Pre-fill the editor with the original body for context;
+    // the user edits it into the corrected form. The wire model
+    // is "amendment is a complete new note," not a diff against
+    // the original (matches FHIR DocumentReference.relatesTo).
+    setAmendDraft(originalBody)
+    setAmendingNoteId(noteId)
+  }
+
+  function onCancelAmend(): void {
+    setAmendingNoteId(null)
+    setAmendDraft('')
+    setAmendError(null)
+  }
+
+  function onSaveAmend(): void {
+    if (amendingNoteId === null) return
+    const body = amendDraft.trim()
+    if (body.length === 0) return
+    setAmendError(null)
+    amendMutation.mutate({ noteId: amendingNoteId, body })
+  }
+
   // --- Encounter lifecycle: finish + cancel (Phase 4C.5) ---
 
   const [lifecycleError, setLifecycleError] = useState<string | null>(null)
@@ -258,6 +337,30 @@ export function EncounterDetailPage(): React.JSX.Element {
     notesQuery.data?.items.filter((n) => (n.status ?? 'DRAFT') === 'SIGNED')
       .length ?? 0
   const canFinish = signedCount > 0 && !finishMutation.isPending
+
+  // Phase 4D.6 threading: split the flat note list into
+  // top-level originals + an `amendsId → amendments[]` map.
+  // Memoized so unrelated re-renders don't re-walk items.
+  // Sibling amendments are ordered by createdAt asc (oldest
+  // first) so the thread reads chronologically downward.
+  const { originals, amendmentsByParent } = useMemo(() => {
+    const items = notesQuery.data?.items ?? []
+    const map = new Map<string, EncounterNote[]>()
+    const orig: EncounterNote[] = []
+    for (const n of items) {
+      if (n.amendsId) {
+        const list = map.get(n.amendsId) ?? []
+        list.push(n)
+        map.set(n.amendsId, list)
+      } else {
+        orig.push(n)
+      }
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    }
+    return { originals: orig, amendmentsByParent: map }
+  }, [notesQuery.data?.items])
 
   const notFound = query.isError && isNotFound(query.error)
   const encounter = query.data
@@ -562,13 +665,22 @@ export function EncounterDetailPage(): React.JSX.Element {
                     className="flex flex-col gap-3"
                     data-testid="notes-list"
                   >
-                    {notesQuery.data.items.map((n) => (
+                    {originals.map((n) => (
                       <NoteRow
                         key={n.id}
                         note={n}
+                        amendments={amendmentsByParent.get(n.id) ?? []}
+                        encounterStatus={encounter.status}
                         onSign={onSignNote}
                         pendingSignNoteId={signingNoteId}
-                        canSign={encounter.status === 'IN_PROGRESS'}
+                        onStartAmend={onStartAmend}
+                        amendingNoteId={amendingNoteId}
+                        amendDraft={amendDraft}
+                        onAmendDraftChange={setAmendDraft}
+                        onSaveAmend={onSaveAmend}
+                        onCancelAmend={onCancelAmend}
+                        amendIsPending={amendMutation.isPending}
+                        amendError={amendError}
                       />
                     ))}
                   </ul>
@@ -582,33 +694,94 @@ export function EncounterDetailPage(): React.JSX.Element {
   )
 }
 
+/**
+ * Note row — renders a top-level note plus, optionally, the
+ * threaded amendments that reference it via `amends_id`. Used
+ * for both originals and (recursively, but always single-level
+ * per the locked 4D.6 plan + V23 trigger) for amendments
+ * displayed as nested rows.
+ *
+ * Two visibility rules at this level (mirrors the backend
+ * contract from chunks B + B.5):
+ *
+ *   1. **Amend button** — visible on a SIGNED non-amendment
+ *      note (`status === 'SIGNED' && !note.amendsId`). Hidden
+ *      on DRAFT (cannot amend an unsigned note) and on
+ *      amendments (single-level chain). Encounter status does
+ *      NOT affect Amend visibility — the whole point is that
+ *      closed encounters CAN be amended.
+ *
+ *   2. **Sign button** — visible on a DRAFT note. For non-
+ *      amendments the parent encounter must be IN_PROGRESS
+ *      (4C.5 rule). For amendments (`note.amendsId != null`)
+ *      sign is allowed regardless of the parent encounter's
+ *      status — that's the 4D.6 chunk B.5 carve-out.
+ */
 function NoteRow({
   note,
+  amendments,
+  encounterStatus,
   onSign,
   pendingSignNoteId,
-  canSign,
+  onStartAmend,
+  amendingNoteId,
+  amendDraft,
+  onAmendDraftChange,
+  onSaveAmend,
+  onCancelAmend,
+  amendIsPending,
+  amendError,
+  nested = false,
 }: {
   note: EncounterNote
+  amendments?: EncounterNote[]
+  encounterStatus: 'PLANNED' | 'IN_PROGRESS' | 'FINISHED' | 'CANCELLED'
   onSign: (noteId: string) => void
   pendingSignNoteId: string | null
-  canSign: boolean
+  onStartAmend: (noteId: string, originalBody: string) => void
+  amendingNoteId: string | null
+  amendDraft: string
+  onAmendDraftChange: (value: string) => void
+  onSaveAmend: () => void
+  onCancelAmend: () => void
+  amendIsPending: boolean
+  amendError: string | null
+  nested?: boolean
 }): React.JSX.Element {
   const status = note.status ?? 'DRAFT'
   const isSigned = status === 'SIGNED'
-  const isPending = pendingSignNoteId === note.id
-  const showSignButton = !isSigned && canSign
+  const isAmendment = note.amendsId !== undefined && note.amendsId !== null
+  const isPendingSign = pendingSignNoteId === note.id
+  const isAmendingThisRow = amendingNoteId === note.id
+  const childAmendments = amendments ?? []
+  const hasAmendments = childAmendments.length > 0
+
+  // Sign visibility — allows signing amendments on closed
+  // encounters per chunk B.5; non-amendment drafts still
+  // require IN_PROGRESS.
+  const showSignButton =
+    !isSigned && (isAmendment || encounterStatus === 'IN_PROGRESS')
+
+  // Amend visibility — only on SIGNED non-amendments. The
+  // chain rule (no amend-of-amendment) is enforced both here
+  // and at the API + V23 trigger.
+  const showAmendButton = isSigned && !isAmendment
+
   return (
     <li
       className={
-        isSigned
-          ? 'border-primary/40 bg-primary/5 rounded-md border p-3'
-          : 'rounded-md border p-3'
+        nested
+          ? 'border-l-primary/30 ml-6 rounded-md border border-l-4 p-3'
+          : isSigned
+            ? 'border-primary/40 bg-primary/5 rounded-md border p-3'
+            : 'rounded-md border p-3'
       }
       data-testid="note-row"
       data-note-status={status}
+      data-note-is-amendment={isAmendment ? 'true' : 'false'}
     >
       <div className="mb-1 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span
             className={
               isSigned
@@ -619,22 +792,50 @@ function NoteRow({
           >
             {isSigned ? 'Signed' : 'Draft'}
           </span>
+          {isAmendment && (
+            <span
+              className="bg-amber-500/15 text-amber-700 dark:text-amber-300 rounded-full px-2 py-0.5 text-xs font-semibold"
+              data-testid="note-amendment-badge"
+            >
+              Amendment
+            </span>
+          )}
+          {hasAmendments && (
+            <span
+              className="bg-secondary text-secondary-foreground rounded-full px-2 py-0.5 text-xs font-semibold"
+              data-testid="note-amended-badge"
+            >
+              Amended
+            </span>
+          )}
           <span className="text-muted-foreground text-xs">
             <span className="font-mono">{note.createdAt}</span> · author{' '}
             <span className="font-mono">{note.createdBy}</span>
           </span>
         </div>
-        {showSignButton && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onSign(note.id)}
-            disabled={isPending}
-            data-testid="sign-note-button"
-          >
-            {isPending ? 'Signing…' : 'Sign'}
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {showSignButton && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onSign(note.id)}
+              disabled={isPendingSign}
+              data-testid="sign-note-button"
+            >
+              {isPendingSign ? 'Signing…' : 'Sign'}
+            </Button>
+          )}
+          {showAmendButton && !isAmendingThisRow && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onStartAmend(note.id, note.body)}
+              data-testid="amend-note-button"
+            >
+              Amend
+            </Button>
+          )}
+        </div>
       </div>
       {isSigned && (
         <p
@@ -646,6 +847,85 @@ function NoteRow({
         </p>
       )}
       <p className="whitespace-pre-wrap text-sm">{note.body}</p>
+
+      {isAmendingThisRow && (
+        <div
+          className="mt-3 flex flex-col gap-2 rounded-md border p-3"
+          data-testid="amend-note-editor"
+        >
+          <label
+            htmlFor={`amend-body-${note.id}`}
+            className="text-muted-foreground text-xs font-medium uppercase tracking-wide"
+          >
+            Amendment body
+          </label>
+          <textarea
+            id={`amend-body-${note.id}`}
+            data-testid="amend-note-textarea"
+            value={amendDraft}
+            onChange={(e) => onAmendDraftChange(e.target.value)}
+            disabled={amendIsPending}
+            rows={4}
+            maxLength={20000}
+            placeholder="Write the amendment…"
+            className="border-input focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          {amendError !== null && (
+            <p
+              role="alert"
+              className="text-destructive text-xs"
+              data-testid="amend-note-error"
+            >
+              {amendError}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onCancelAmend}
+              disabled={amendIsPending}
+              data-testid="amend-cancel-button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={onSaveAmend}
+              disabled={amendIsPending || amendDraft.trim().length === 0}
+              data-testid="amend-save-button"
+            >
+              {amendIsPending ? 'Saving…' : 'Save amendment'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {hasAmendments && (
+        <ul
+          className="mt-3 flex flex-col gap-2"
+          data-testid="note-amendments-thread"
+        >
+          {childAmendments.map((child) => (
+            <NoteRow
+              key={child.id}
+              note={child}
+              encounterStatus={encounterStatus}
+              onSign={onSign}
+              pendingSignNoteId={pendingSignNoteId}
+              onStartAmend={onStartAmend}
+              amendingNoteId={amendingNoteId}
+              amendDraft={amendDraft}
+              onAmendDraftChange={onAmendDraftChange}
+              onSaveAmend={onSaveAmend}
+              onCancelAmend={onCancelAmend}
+              amendIsPending={amendIsPending}
+              amendError={amendError}
+              nested
+            />
+          ))}
+        </ul>
+      )}
     </li>
   )
 }

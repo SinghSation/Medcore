@@ -7,6 +7,7 @@ import com.medcore.clinical.encounter.model.EncounterNoteStatus
 import com.medcore.clinical.encounter.model.EncounterStatus
 import com.medcore.clinical.encounter.read.ListEncounterNotesResult
 import com.medcore.clinical.encounter.read.ListPatientEncountersResult
+import com.medcore.clinical.encounter.write.AmendNoteCommand
 import com.medcore.clinical.encounter.write.CancelEncounterCommand
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
@@ -198,6 +199,47 @@ data class CreateEncounterNoteRequest(
         return CreateEncounterNoteCommand(
             slug = slug,
             encounterId = encounterId,
+            body = raw,
+        )
+    }
+}
+
+/**
+ * HTTP DTO for
+ * `POST /api/v1/tenants/{slug}/encounters/{encounterId}/notes/{noteId}/amend`
+ * (Phase 4D.6).
+ *
+ * Same wire shape as [CreateEncounterNoteRequest] — a single
+ * `body` field. The amendment is a complete, self-contained
+ * note rather than a diff against the original; that keeps
+ * audit + retrieval simple and matches FHIR
+ * `DocumentReference.relatesTo: replaces` semantics.
+ *
+ * Validator at
+ * [com.medcore.clinical.encounter.write.AmendNoteValidator]
+ * enforces the same 1..20,000 char body bound as create-note,
+ * matching V19's CHECK constraint.
+ *
+ * The `noteId` (the original being amended) and `encounterId`
+ * come from the URL path, not the body — preventing
+ * client-supplied amends_id mismatches and aligning with the
+ * established controller pattern.
+ */
+data class AmendNoteRequest(
+    @field:NotNull
+    val body: String?,
+) {
+    fun toCommand(
+        slug: String,
+        encounterId: UUID,
+        originalNoteId: UUID,
+    ): AmendNoteCommand {
+        val raw = body
+            ?: throw WriteValidationException(field = "body", code = "required")
+        return AmendNoteCommand(
+            slug = slug,
+            encounterId = encounterId,
+            originalNoteId = originalNoteId,
             body = raw,
         )
     }

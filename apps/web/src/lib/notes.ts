@@ -15,8 +15,9 @@ export type EncounterNoteStatus = 'DRAFT' | 'SIGNED'
  *     wire post-4D.5; optional in the type for defensive
  *     decoding of any hypothetical pre-4D.5 cache entries.
  *   - `signedAt` / `signedBy` — present ⇔ status = SIGNED.
- *   - `amendsId` — reserved for the future amendment workflow;
- *     always absent in 4D.5.
+ *   - `amendsId` — set on amendment rows that reference an
+ *     original SIGNED note (Phase 4D.6). Originals and DRAFT
+ *     non-amendments leave it absent.
  */
 export interface EncounterNote {
   id: string
@@ -105,6 +106,55 @@ export async function signEncounterNote(
     `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/encounters/${encodeURIComponent(encounterId)}/notes/${encodeURIComponent(noteId)}/sign`,
     {
       method: 'POST',
+      tenantSlug,
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  )
+}
+
+export interface AmendEncounterNoteParams {
+  tenantSlug: string
+  encounterId: string
+  noteId: string
+  body: string
+  signal?: AbortSignal
+}
+
+/**
+ * Amend a SIGNED note (Phase 4D.6). Creates a NEW DRAFT note
+ * referencing the original via `amends_id`. The original is
+ * never mutated — V20's immutability trigger guarantees that
+ * even at the DB layer.
+ *
+ * URL pattern matches the 4D.5 sign action: `.../{noteId}/amend`.
+ * The new amendment goes through the existing 4D.5 sign endpoint
+ * to be promoted to SIGNED. Per the 4D.6 chunk B.5 carve-out,
+ * amendments may be signed regardless of the parent encounter's
+ * status — that's the point of post-encounter correction.
+ *
+ * - 201 → returns the new DRAFT amendment with `amendsId`
+ *   populated. Caller invalidates the encounter-notes list so
+ *   the new row threads under the original.
+ * - 403 → caller lacks `NOTE_WRITE`.
+ * - 404 → unknown noteId / cross-tenant / cross-encounter
+ *   (no existence leak).
+ * - 409 `resource.conflict` with one of:
+ *   - `details.reason: cannot_amend_unsigned_note` — the
+ *     target note is still DRAFT.
+ *   - `details.reason: cannot_amend_an_amendment` — single-
+ *     level chain rule.
+ *   - `details.reason: amendment_integrity_violation` — V23
+ *     trigger fired (rare; race or post-handler bypass).
+ */
+export async function amendEncounterNote(
+  params: AmendEncounterNoteParams,
+): Promise<EncounterNote> {
+  const { tenantSlug, encounterId, noteId, body, signal } = params
+  return apiFetch<EncounterNote>(
+    `/api/v1/tenants/${encodeURIComponent(tenantSlug)}/encounters/${encodeURIComponent(encounterId)}/notes/${encodeURIComponent(noteId)}/amend`,
+    {
+      method: 'POST',
+      body: { body },
       tenantSlug,
       ...(signal !== undefined ? { signal } : {}),
     },

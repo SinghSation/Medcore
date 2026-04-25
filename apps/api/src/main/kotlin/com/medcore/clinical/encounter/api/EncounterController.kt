@@ -8,6 +8,8 @@ import com.medcore.clinical.encounter.read.ListEncounterNotesResult
 import com.medcore.clinical.encounter.read.ListPatientEncountersCommand
 import com.medcore.clinical.encounter.read.ListPatientEncountersHandler
 import com.medcore.clinical.encounter.read.ListPatientEncountersResult
+import com.medcore.clinical.encounter.write.AmendNoteCommand
+import com.medcore.clinical.encounter.write.AmendNoteHandler
 import com.medcore.clinical.encounter.write.CancelEncounterCommand
 import com.medcore.clinical.encounter.write.CancelEncounterHandler
 import com.medcore.clinical.encounter.write.CreateEncounterNoteCommand
@@ -94,6 +96,10 @@ class EncounterController(
     private val signEncounterNoteGate:
         WriteGate<SignEncounterNoteCommand, EncounterNoteSnapshot>,
     private val signEncounterNoteHandler: SignEncounterNoteHandler,
+    // --- 4D.6 note amendments ---
+    private val amendNoteGate:
+        WriteGate<AmendNoteCommand, EncounterNoteSnapshot>,
+    private val amendNoteHandler: AmendNoteHandler,
     // --- 4C.5 encounter finish + cancel ---
     private val finishEncounterGate:
         WriteGate<FinishEncounterCommand, EncounterSnapshot>,
@@ -379,6 +385,72 @@ class EncounterController(
             requestId = MDC.get(MdcKeys.REQUEST_ID),
         )
         return ResponseEntity.ok()
+            .eTag("\"${snapshot.rowVersion}\"")
+            .body(responseBody)
+    }
+
+    // ========================================================================
+    // Phase 4D.6 — note amendments
+    // ========================================================================
+
+    /**
+     * Amend a SIGNED note (Phase 4D.6). Creates a NEW DRAFT note
+     * that references the original via `amends_id`. The original
+     * is never mutated — V20's immutability trigger guarantees
+     * byte-stability of the legal record. The amendment goes
+     * through the existing 4D.5 sign endpoint to be promoted to
+     * SIGNED.
+     *
+     * Action-style URL (`/amend`) follows the FHIR convention for
+     * relatesTo state-transition operations and matches the
+     * sibling `/sign` endpoint shape.
+     *
+     * Emits `CLINICAL_ENCOUNTER_NOTE_AMENDED` on 201 (resource_id
+     * = amendment UUID; original UUID embedded in reason slug).
+     * Requires `NOTE_WRITE` (OWNER + ADMIN).
+     *
+     * 409 paths (all carry `details.reason` per the platform
+     * envelope):
+     *   - `cannot_amend_unsigned_note` — original is DRAFT.
+     *   - `cannot_amend_an_amendment` — single-level chain rule.
+     *   - `amendment_integrity_violation` — V23 trigger fired
+     *     (race or post-handler bypass).
+     *
+     * 404 paths (no existence leak): unknown noteId, cross-tenant
+     * note, note belongs to a different encounter than URL.
+     *
+     * Encounter-status discipline — amendments work on
+     * IN_PROGRESS, FINISHED, AND CANCELLED encounters. That is
+     * the entire point: clinicians must be able to correct or
+     * extend a SIGNED note after the encounter window closes.
+     */
+    @PostMapping(
+        "/api/v1/tenants/{slug}/encounters/{encounterId}/notes/{noteId}/amend",
+        consumes = [MediaType.APPLICATION_JSON_VALUE],
+        produces = [MediaType.APPLICATION_JSON_VALUE],
+    )
+    fun amendNote(
+        @AuthenticationPrincipal principal: MedcorePrincipal,
+        @PathVariable slug: String,
+        @PathVariable encounterId: UUID,
+        @PathVariable noteId: UUID,
+        @Valid @RequestBody body: AmendNoteRequest,
+        @RequestHeader(name = "Idempotency-Key", required = false) idempotencyKey: String?,
+    ): ResponseEntity<ApiResponse<EncounterNoteResponse>> {
+        val command = body.toCommand(
+            slug = slug,
+            encounterId = encounterId,
+            originalNoteId = noteId,
+        )
+        val context = WriteContext(principal = principal, idempotencyKey = idempotencyKey)
+        val snapshot = amendNoteGate.apply(command, context) { cmd ->
+            amendNoteHandler.handle(cmd, context)
+        }
+        val responseBody = ApiResponse(
+            data = EncounterNoteResponse.from(snapshot),
+            requestId = MDC.get(MdcKeys.REQUEST_ID),
+        )
+        return ResponseEntity.status(HttpStatus.CREATED)
             .eTag("\"${snapshot.rowVersion}\"")
             .body(responseBody)
     }
