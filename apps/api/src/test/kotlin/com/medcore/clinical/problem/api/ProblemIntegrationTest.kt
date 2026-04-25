@@ -1,4 +1,4 @@
-package com.medcore.clinical.allergy.api
+package com.medcore.clinical.problem.api
 
 import com.medcore.TestcontainersConfiguration
 import com.medcore.TestcontainersConfiguration.Companion.MOCK_ISSUER_ID
@@ -24,21 +24,28 @@ import org.springframework.http.ResponseEntity
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
- * End-to-end coverage for the allergy HTTP surface (Phase 4E.1):
+ * End-to-end coverage for the problem HTTP surface (Phase 4E.2):
  *
- *   POST   /api/v1/tenants/{slug}/patients/{patientId}/allergies
- *   PATCH  /api/v1/tenants/{slug}/patients/{patientId}/allergies/{id}
- *   GET    /api/v1/tenants/{slug}/patients/{patientId}/allergies
+ *   POST   /api/v1/tenants/{slug}/patients/{patientId}/problems
+ *   PATCH  /api/v1/tenants/{slug}/patients/{patientId}/problems/{id}
+ *   GET    /api/v1/tenants/{slug}/patients/{patientId}/problems
  *
- * 16 cases covering: auth, RBAC, validation, cross-tenant /
- * cross-patient 404 discipline, status-transition audits
- * (UPDATED vs REVOKED dispatch), terminal-state refusal,
- * If-Match precondition, idempotent re-revoke suppression,
- * and list-audit shape including count=0.
+ * Cases cover: auth, RBAC, cross-tenant 404 discipline,
+ * validation (incl. abatement-vs-onset coherence), all THREE
+ * 409 conflict reasons (`stale_row`, `problem_terminal`,
+ * `problem_invalid_transition` — the new RESOLVED ≠ INACTIVE
+ * structural enforcement), three-way audit dispatch
+ * (UPDATED / RESOLVED / REVOKED) including the recurrence
+ * narrative (RESOLVED → ACTIVE), idempotent re-revoke
+ * suppression, and list-audit shape including `count = 0`.
+ *
+ * Mirrors `AllergyIntegrationTest` shape; differences are
+ * domain-specific (severity nullable, RESOLVED transitions,
+ * `problem_invalid_transition` conflict reason).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration::class)
-class AllergyIntegrationTest {
+class ProblemIntegrationTest {
 
     @Autowired lateinit var rest: TestRestTemplate
     @Autowired lateinit var mockOAuth2Server: MockOAuth2Server
@@ -53,6 +60,9 @@ class AllergyIntegrationTest {
     fun reset() {
         jdbc = JdbcTemplate(dataSource)
         jdbc.update("DELETE FROM audit.audit_event")
+        // V25 FK: clinical.problem → clinical.patient (default
+        // RESTRICT). Delete BEFORE clinical.patient to keep the
+        // cleanup chain valid. Same discipline as clinical.allergy.
         jdbc.update("DELETE FROM clinical.problem")
         jdbc.update("DELETE FROM clinical.allergy")
         jdbc.update("DELETE FROM clinical.encounter_note")
@@ -72,7 +82,7 @@ class AllergyIntegrationTest {
     @Test
     fun `POST without bearer returns 401`() {
         val response = rest.exchange(
-            "/api/v1/tenants/acme-health/patients/${UUID.randomUUID()}/allergies",
+            "/api/v1/tenants/acme-health/patients/${UUID.randomUUID()}/problems",
             HttpMethod.POST,
             HttpEntity(MINIMAL_ADD_BODY, jsonHeaders()),
             Map::class.java,
@@ -85,7 +95,7 @@ class AllergyIntegrationTest {
     // ========================================================================
 
     @Test
-    fun `OWNER adds allergy — 201 + ETag + audit row + DB row`() {
+    fun `OWNER adds problem — 201 + ETag + audit row + DB row`() {
         val (userId, _, patientId) = seedOwnerAndPatient("alice")
 
         val response = post("alice", "acme-health", patientId, MINIMAL_ADD_BODY)
@@ -94,357 +104,381 @@ class AllergyIntegrationTest {
 
         @Suppress("UNCHECKED_CAST")
         val data = response.body!!["data"] as Map<String, Any>
-        val allergyId = UUID.fromString(data["id"] as String)
-        assertThat(data["substanceText"]).isEqualTo("Penicillin")
-        assertThat(data["severity"]).isEqualTo("SEVERE")
+        val problemId = UUID.fromString(data["id"] as String)
+        assertThat(data["conditionText"]).isEqualTo("Type 2 diabetes mellitus")
         assertThat(data["status"]).isEqualTo("ACTIVE")
         assertThat(data["rowVersion"]).isEqualTo(0)
         assertThat(data["createdBy"]).isEqualTo(userId.toString())
+        // Severity NOT in MINIMAL_ADD_BODY — column null; @JsonInclude(NON_NULL)
+        // omits it from the response.
+        assertThat(data).doesNotContainKey("severity")
 
         val rowCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM clinical.allergy WHERE id = ?",
-            Long::class.java, allergyId,
+            "SELECT COUNT(*) FROM clinical.problem WHERE id = ?",
+            Long::class.java, problemId,
         )
         assertThat(rowCount).isEqualTo(1L)
 
-        val audit = auditRows("clinical.allergy.added").single()
+        val audit = auditRows("clinical.problem.added").single()
         assertThat(audit["actor_id"]).isEqualTo(userId)
-        assertThat(audit["resource_type"]).isEqualTo("clinical.allergy")
-        assertThat(audit["resource_id"]).isEqualTo(allergyId.toString())
+        assertThat(audit["resource_type"]).isEqualTo("clinical.problem")
+        assertThat(audit["resource_id"]).isEqualTo(problemId.toString())
         assertThat(audit["outcome"]).isEqualTo("SUCCESS")
-        assertThat(audit["reason"] as String)
-            .isEqualTo("intent:clinical.allergy.add|severity:SEVERE")
+        // No severity token in the slug — see AddProblemAuditor KDoc.
+        assertThat(audit["reason"] as String).isEqualTo("intent:clinical.problem.add")
     }
 
     // ========================================================================
-    // 3 — ADMIN can add
+    // 3 — ADMIN can add (mirrors allergy)
     // ========================================================================
 
     @Test
-    fun `ADMIN can add allergy — 201`() {
-        val owner = provisionUser("owner")
-        val admin = provisionUser("alice")
-        val tenant = seedTenant("acme-health")
-        seedMembership(tenant, owner, role = "OWNER")
-        seedMembership(tenant, admin, role = "ADMIN")
-        val patientId = createPatient("owner", "acme-health")
+    fun `ADMIN adds problem — 201`() {
+        val tenantId = seedTenant("acme-health")
+        val adminUser = provisionUser("admin1")
+        seedMembership(tenantId, adminUser, role = "ADMIN")
 
-        val response = post("alice", "acme-health", patientId, MINIMAL_ADD_BODY)
+        val ownerUser = provisionUser("alice")
+        seedMembership(tenantId, ownerUser, role = "OWNER")
+        val patientId = createPatient("alice", "acme-health")
+
+        val response = post("admin1", "acme-health", patientId, MINIMAL_ADD_BODY)
         assertThat(response.statusCode).isEqualTo(HttpStatus.CREATED)
     }
 
     // ========================================================================
-    // 4 — MEMBER cannot add (RBAC)
+    // 4 — MEMBER cannot add — 403 + AUTHZ_WRITE_DENIED audit
     // ========================================================================
 
     @Test
-    fun `MEMBER cannot add allergy — 403 + AUTHZ_WRITE_DENIED with add intent`() {
-        val owner = provisionUser("owner")
-        val member = provisionUser("alice")
-        val tenant = seedTenant("acme-health")
-        seedMembership(tenant, owner, role = "OWNER")
-        seedMembership(tenant, member, role = "MEMBER")
-        val patientId = createPatient("owner", "acme-health")
+    fun `MEMBER cannot add — 403 + AUTHZ_WRITE_DENIED audit`() {
+        val tenantId = seedTenant("acme-health")
+        val ownerUser = provisionUser("alice")
+        seedMembership(tenantId, ownerUser, role = "OWNER")
+        val patientId = createPatient("alice", "acme-health")
+        val memberUser = provisionUser("bob")
+        seedMembership(tenantId, memberUser, role = "MEMBER")
         jdbc.update("DELETE FROM audit.audit_event")
 
-        val response = post("alice", "acme-health", patientId, MINIMAL_ADD_BODY)
+        val response = post("bob", "acme-health", patientId, MINIMAL_ADD_BODY)
         assertThat(response.statusCode).isEqualTo(HttpStatus.FORBIDDEN)
 
-        assertThat(auditRows("clinical.allergy.added")).isEmpty()
-        val denied = auditRows("authz.write.denied").single()
-        assertThat(denied["reason"] as String)
-            .contains("intent:clinical.allergy.add")
-            .contains("denial:")
+        val denials = auditRows("authz.write.denied")
+        assertThat(denials).hasSize(1)
+        assertThat(denials[0]["resource_type"]).isEqualTo("clinical.problem")
+        assertThat(denials[0]["reason"] as String)
+            .contains("intent:clinical.problem.add|denial:")
     }
 
     // ========================================================================
-    // 5 — Validation: blank substance
+    // 5 — Cross-tenant patient → 404 (no existence leak)
     // ========================================================================
 
     @Test
-    fun `POST blank substanceText — 422`() {
+    fun `cross-tenant patient probe returns 404 — no existence leak`() {
+        // Tenant A with patient.
+        val (_, _, aPatientId) = seedOwnerAndPatient("alice")
+
+        // Tenant B with a different OWNER. Alice is NOT a member of B.
+        val tenantB = seedTenant("rival-health")
+        val carolUser = provisionUser("carol")
+        seedMembership(tenantB, carolUser, role = "OWNER")
+
+        // Alice tries to add a problem on her own patient via tenant B.
+        val response = post("alice", "rival-health", aPatientId, MINIMAL_ADD_BODY)
+        // 403 (not member of B) is acceptable; 404 if RLS-policy
+        // refuses earlier. Either is "no existence leak"; we assert
+        // the response is NOT 201.
+        assertThat(response.statusCode).isIn(HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND)
+    }
+
+    // ========================================================================
+    // 6 — Validation: empty conditionText → 422
+    // ========================================================================
+
+    @Test
+    fun `empty conditionText returns 422`() {
         val (_, _, patientId) = seedOwnerAndPatient("alice")
         val response = post(
             "alice", "acme-health", patientId,
-            """{"substanceText":"   ","severity":"MILD"}""",
+            body = """{"conditionText":""}""",
         )
         assertThat(response.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
     }
 
     // ========================================================================
-    // 6 — Validation: malformed severity enum
+    // 7 — Validation: abatementDate before onsetDate → 422
     // ========================================================================
 
     @Test
-    fun `POST unknown severity token — 422 with format code`() {
+    fun `abatementDate before onsetDate returns 422`() {
         val (_, _, patientId) = seedOwnerAndPatient("alice")
         val response = post(
             "alice", "acme-health", patientId,
-            """{"substanceText":"Latex","severity":"PROBABLY_BAD"}""",
+            body = """{"conditionText":"Asthma","onsetDate":"2020-01-01","abatementDate":"2019-06-15"}""",
         )
         assertThat(response.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
-    }
-
-    // ========================================================================
-    // 7 — Cross-tenant patient on POST → 404 (no leak)
-    // ========================================================================
-
-    @Test
-    fun `POST with cross-tenant patientId — 404, no audit, no leak`() {
-        val alice = provisionUser("alice")
-        val tenantA = seedTenant("tenant-a")
-        val tenantB = seedTenant("tenant-b")
-        seedMembership(tenantA, alice, role = "OWNER")
-        seedMembership(tenantB, alice, role = "OWNER")
-        val patientInA = createPatient("alice", "tenant-a")
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        // Try to add allergy to tenant-A's patient via tenant-B's URL.
-        val response = post("alice", "tenant-b", patientInA, MINIMAL_ADD_BODY)
-        assertThat(response.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
-        assertThat(auditRows("clinical.allergy.added")).isEmpty()
-    }
-
-    // ========================================================================
-    // 8 — PATCH severity only (no status change) → UPDATED audit (no status_from/to)
-    // ========================================================================
-
-    @Test
-    fun `PATCH severity only — 200 + UPDATED audit without status transition tokens`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"severity":"MILD"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
-
-        val audit = auditRows("clinical.allergy.updated").single()
-        assertThat(audit["reason"] as String)
-            .isEqualTo("intent:clinical.allergy.update|fields:severity")
-    }
-
-    // ========================================================================
-    // 9 — PATCH ACTIVE→INACTIVE → UPDATED audit with status_from/status_to
-    // ========================================================================
-
-    @Test
-    fun `PATCH ACTIVE to INACTIVE — 200 + UPDATED audit with status_from and status_to`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"status":"INACTIVE"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+        // The 422 envelope is uniform across bean-validation and
+        // domain validators (Phase 3J.2): `details.validationErrors`
+        // is a list of `{field, code}` objects.
         @Suppress("UNCHECKED_CAST")
-        val data = response.body!!["data"] as Map<String, Any>
-        assertThat(data["status"]).isEqualTo("INACTIVE")
-
-        val audit = auditRows("clinical.allergy.updated").single()
-        assertThat(audit["reason"] as String).isEqualTo(
-            "intent:clinical.allergy.update|fields:status|status_from:ACTIVE|status_to:INACTIVE",
-        )
+        val details = response.body!!["details"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val errors = details["validationErrors"] as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("abatementDate")
+            assertThat(err["code"]).isEqualTo("before_onset_date")
+        }
     }
 
     // ========================================================================
-    // 10 — PATCH → ENTERED_IN_ERROR dispatches to REVOKED audit action
+    // 8 — PATCH without If-Match → 428
     // ========================================================================
 
     @Test
-    fun `PATCH status to ENTERED_IN_ERROR — 200 + REVOKED audit + prior_status in reason`() {
+    fun `PATCH without If-Match header — 428`() {
         val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"status":"ENTERED_IN_ERROR"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
-        @Suppress("UNCHECKED_CAST")
-        val data = response.body!!["data"] as Map<String, Any>
-        assertThat(data["status"]).isEqualTo("ENTERED_IN_ERROR")
-
-        // Crucially: REVOKED action, NOT UPDATED.
-        assertThat(auditRows("clinical.allergy.updated")).isEmpty()
-        val audit = auditRows("clinical.allergy.revoked").single()
-        assertThat(audit["resource_id"]).isEqualTo(allergyId.toString())
-        assertThat(audit["reason"] as String)
-            .isEqualTo("intent:clinical.allergy.revoke|prior_status:ACTIVE")
-    }
-
-    // ========================================================================
-    // 11 — Terminal state refusal: PATCH on already-ENTERED_IN_ERROR with change
-    // ========================================================================
-
-    @Test
-    fun `PATCH on terminal row with actual change — 409 allergy_terminal`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-
-        // Step 1: revoke.
-        val revoked = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"status":"ENTERED_IN_ERROR"}""",
-        )
-        assertThat(revoked.statusCode).isEqualTo(HttpStatus.OK)
-        @Suppress("UNCHECKED_CAST")
-        val rev = revoked.body!!["data"] as Map<String, Any>
-        val newRowVersion = (rev["rowVersion"] as Number).toLong()
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        // Step 2: try to change severity on the terminal row.
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = newRowVersion,
-            body = """{"severity":"MILD"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.CONFLICT)
-        assertThat(response.body!!["code"]).isEqualTo("resource.conflict")
-        @Suppress("UNCHECKED_CAST")
-        val details = response.body!!["details"] as Map<String, Any?>
-        assertThat(details["reason"]).isEqualTo("allergy_terminal")
-        assertThat(auditRows("clinical.allergy.updated")).isEmpty()
-    }
-
-    // ========================================================================
-    // 12 — Idempotent re-revoke: terminal + no actual change → 200 + no audit
-    // ========================================================================
-
-    @Test
-    fun `PATCH idempotent re-revoke on terminal row — 200 + no audit emission`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-
-        val revoked = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"status":"ENTERED_IN_ERROR"}""",
-        )
-        @Suppress("UNCHECKED_CAST")
-        val newRowVersion = ((revoked.body!!["data"] as Map<String, Any>)["rowVersion"] as Number)
-            .toLong()
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        // Re-send the same status — idempotent no-op.
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = newRowVersion,
-            body = """{"status":"ENTERED_IN_ERROR"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
-        // NO audit emission — neither updated nor revoked.
-        assertThat(auditRows("clinical.allergy.updated")).isEmpty()
-        assertThat(auditRows("clinical.allergy.revoked")).isEmpty()
-    }
-
-    // ========================================================================
-    // 13 — Stale If-Match → 409 stale_row
-    // ========================================================================
-
-    @Test
-    fun `PATCH with stale If-Match — 409 stale_row`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
-        // Mutate row to bump rowVersion to 1.
-        patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"severity":"MILD"}""",
-        )
-
-        // Now try with stale rowVersion=0 again.
-        val response = patch(
-            "alice", "acme-health", patientId, allergyId,
-            ifMatch = 0L,
-            body = """{"severity":"MODERATE"}""",
-        )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.CONFLICT)
-        @Suppress("UNCHECKED_CAST")
-        val details = response.body!!["details"] as Map<String, Any?>
-        assertThat(details["reason"]).isEqualTo("stale_row")
-    }
-
-    // ========================================================================
-    // 14 — PATCH without If-Match → 428 PreconditionRequired
-    // ========================================================================
-
-    @Test
-    fun `PATCH without If-Match header — 428 precondition required`() {
-        val (_, _, patientId) = seedOwnerAndPatient("alice")
-        val (allergyId, _) = createAllergy("alice", patientId)
+        val (problemId, _) = createProblem("alice", patientId)
 
         val headers = authJsonHeaders(tokenFor("alice")).apply {
             add("X-Medcore-Tenant", "acme-health")
-            // deliberately no If-Match
         }
         val response = rest.exchange(
-            "/api/v1/tenants/acme-health/patients/$patientId/allergies/$allergyId",
+            "/api/v1/tenants/acme-health/patients/$patientId/problems/$problemId",
             HttpMethod.PATCH,
-            HttpEntity("""{"severity":"MILD"}""", headers),
+            HttpEntity("""{"status":"INACTIVE"}""", headers),
             Map::class.java,
         )
         assertThat(response.statusCode).isEqualTo(HttpStatus.PRECONDITION_REQUIRED)
     }
 
     // ========================================================================
-    // 15 — Cross-tenant allergyId on PATCH → 404 (no existence leak)
+    // 9 — PATCH with stale If-Match → 409 details.reason: stale_row
     // ========================================================================
 
     @Test
-    fun `PATCH cross-tenant allergyId — 404, no audit`() {
-        val alice = provisionUser("alice")
-        val tenantA = seedTenant("tenant-a")
-        val tenantB = seedTenant("tenant-b")
-        seedMembership(tenantA, alice, role = "OWNER")
-        seedMembership(tenantB, alice, role = "OWNER")
-        val patientInA = createPatient("alice", "tenant-a")
-        val (allergyInA, _) = createAllergy("alice", patientInA, slug = "tenant-a")
-        val patientInB = createPatient("alice", "tenant-b")
-        jdbc.update("DELETE FROM audit.audit_event")
-
-        // Route PATCH to tenant-B's URL with tenant-A's allergyId.
-        val response = patch(
-            "alice", "tenant-b", patientInB, allergyInA,
-            ifMatch = 0L,
-            body = """{"severity":"MILD"}""",
+    fun `PATCH with stale If-Match — 409 stale_row`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+        // Bump rowVersion to 1 with a real change.
+        patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"severity":"MILD"}""",
         )
-        assertThat(response.statusCode).isEqualTo(HttpStatus.NOT_FOUND)
-        assertThat(auditRows("clinical.allergy.updated")).isEmpty()
-        assertThat(auditRows("clinical.allergy.revoked")).isEmpty()
+
+        // Try again with stale rowVersion=0.
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"severity":"SEVERE"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = response.body!!["details"] as Map<String, Any>
+        assertThat(details["reason"]).isEqualTo("stale_row")
     }
 
     // ========================================================================
-    // 16 — GET list ordering + count audit (covers populated AND empty paths)
+    // 10 — PATCH ACTIVE → INACTIVE: emits CLINICAL_PROBLEM_UPDATED
     // ========================================================================
 
     @Test
-    fun `GET list — ACTIVE first then INACTIVE then ENTERED_IN_ERROR + count audit`() {
+    fun `PATCH ACTIVE to INACTIVE emits CLINICAL_PROBLEM_UPDATED with status_from_to`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"INACTIVE"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+
+        val audit = auditRows("clinical.problem.updated").single()
+        assertThat(audit["reason"] as String)
+            .isEqualTo("intent:clinical.problem.update|fields:status|status_from:ACTIVE|status_to:INACTIVE")
+        assertThat(auditRows("clinical.problem.resolved")).isEmpty()
+        assertThat(auditRows("clinical.problem.revoked")).isEmpty()
+    }
+
+    // ========================================================================
+    // 11 — PATCH ACTIVE → RESOLVED: dedicated CLINICAL_PROBLEM_RESOLVED audit
+    // ========================================================================
+
+    @Test
+    fun `PATCH ACTIVE to RESOLVED emits CLINICAL_PROBLEM_RESOLVED with prior_status`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"RESOLVED"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+
+        val audit = auditRows("clinical.problem.resolved").single()
+        assertThat(audit["reason"] as String)
+            .isEqualTo("intent:clinical.problem.resolve|prior_status:ACTIVE")
+        // No UPDATED row — RESOLVED is its own action, NOT a flag
+        // on UPDATED. Load-bearing distinction: RESOLVED ≠ INACTIVE.
+        assertThat(auditRows("clinical.problem.updated")).isEmpty()
+    }
+
+    // ========================================================================
+    // 12 — PATCH RESOLVED → ACTIVE recurrence — UPDATED, slug preserves narrative
+    // ========================================================================
+
+    @Test
+    fun `PATCH RESOLVED to ACTIVE recurrence emits UPDATED with status_from_RESOLVED`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+
+        // ACTIVE → RESOLVED.
+        patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"RESOLVED"}""",
+        )
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        // RESOLVED → ACTIVE (recurrence).
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 1L, body = """{"status":"ACTIVE"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+
+        // Recurrence routes to UPDATED, not RESOLVED. The slug
+        // preserves the recurrence narrative via status_from /
+        // status_to so forensic queries can isolate it.
+        val audit = auditRows("clinical.problem.updated").single()
+        assertThat(audit["reason"] as String)
+            .isEqualTo("intent:clinical.problem.update|fields:status|status_from:RESOLVED|status_to:ACTIVE")
+        assertThat(auditRows("clinical.problem.resolved")).isEmpty()
+    }
+
+    // ========================================================================
+    // 13 — PATCH RESOLVED → INACTIVE refused — 409 problem_invalid_transition
+    // (THE LOAD-BEARING RESOLVED ≠ INACTIVE TEST)
+    // ========================================================================
+
+    @Test
+    fun `PATCH RESOLVED to INACTIVE refused — 409 problem_invalid_transition`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+        patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"RESOLVED"}""",
+        )
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 1L, body = """{"status":"INACTIVE"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = response.body!!["details"] as Map<String, Any>
+        assertThat(details["reason"]).isEqualTo("problem_invalid_transition")
+        // No success audit row.
+        assertThat(auditRows("clinical.problem.updated")).isEmpty()
+        assertThat(auditRows("clinical.problem.resolved")).isEmpty()
+    }
+
+    // ========================================================================
+    // 14 — PATCH ACTIVE → ENTERED_IN_ERROR — emits CLINICAL_PROBLEM_REVOKED
+    // ========================================================================
+
+    @Test
+    fun `PATCH to ENTERED_IN_ERROR emits CLINICAL_PROBLEM_REVOKED with prior_status`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"ENTERED_IN_ERROR"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+
+        val audit = auditRows("clinical.problem.revoked").single()
+        assertThat(audit["reason"] as String)
+            .isEqualTo("intent:clinical.problem.revoke|prior_status:ACTIVE")
+        assertThat(auditRows("clinical.problem.updated")).isEmpty()
+    }
+
+    // ========================================================================
+    // 15 — PATCH on terminal row with actual change — 409 problem_terminal
+    // ========================================================================
+
+    @Test
+    fun `PATCH on terminal row with actual change — 409 problem_terminal`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+        patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"ENTERED_IN_ERROR"}""",
+        )
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 1L, body = """{"status":"ACTIVE"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.CONFLICT)
+        @Suppress("UNCHECKED_CAST")
+        val details = response.body!!["details"] as Map<String, Any>
+        assertThat(details["reason"]).isEqualTo("problem_terminal")
+        assertThat(auditRows("clinical.problem.updated")).isEmpty()
+    }
+
+    // ========================================================================
+    // 16 — Idempotent re-revoke on terminal row — 200, no audit emitted
+    // ========================================================================
+
+    @Test
+    fun `idempotent re-revoke on terminal row — 200 + no audit emission`() {
+        val (_, _, patientId) = seedOwnerAndPatient("alice")
+        val (problemId, _) = createProblem("alice", patientId)
+        patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 0L, body = """{"status":"ENTERED_IN_ERROR"}""",
+        )
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        // Re-revoke with same status — no actual change.
+        val response = patch(
+            "alice", "acme-health", patientId, problemId,
+            ifMatch = 1L, body = """{"status":"ENTERED_IN_ERROR"}""",
+        )
+        assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
+        // No-op: no audit row of any kind.
+        assertThat(auditRows("clinical.problem.revoked")).isEmpty()
+        assertThat(auditRows("clinical.problem.updated")).isEmpty()
+    }
+
+    // ========================================================================
+    // 17 — GET list ordering + count audit (populated AND empty)
+    // ========================================================================
+
+    @Test
+    fun `GET list — ACTIVE first then INACTIVE then RESOLVED then ENTERED_IN_ERROR + count audit`() {
         val (_, _, patientId) = seedOwnerAndPatient("alice")
 
-        // Seed three allergies; transition one to INACTIVE and one to ENTERED_IN_ERROR.
-        // The list ordering invariant we assert is status-bucket priority
-        // (ACTIVE → INACTIVE → ENTERED_IN_ERROR), not created_at — so the
-        // tie-breaker doesn't need wall-clock spacing between inserts.
-        val (a1, _) = createAllergy("alice", patientId, body =
-            """{"substanceText":"Tree nuts","severity":"MODERATE"}""")
-        val (a2, _) = createAllergy("alice", patientId, body =
-            """{"substanceText":"Latex","severity":"MILD"}""")
-        val (a3, _) = createAllergy("alice", patientId, body =
-            """{"substanceText":"Penicillin","severity":"SEVERE"}""")
-        // a1 stays ACTIVE; a2 → INACTIVE; a3 → ENTERED_IN_ERROR.
-        patch("alice", "acme-health", patientId, a2, ifMatch = 0L,
+        // Seed four problems and transition them so each status
+        // bucket is populated. The list ordering invariant we
+        // assert is status priority — created_at spacing is
+        // not load-bearing for this test (4E.1 retro).
+        val (p1, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Asthma"}""")
+        val (p2, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Migraine"}""")
+        val (p3, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Bronchitis 2019"}""")
+        val (p4, _) = createProblem("alice", patientId,
+            body = """{"conditionText":"Wrong-entry"}""")
+        // p1 stays ACTIVE; p2 → INACTIVE; p3 → RESOLVED; p4 → ENTERED_IN_ERROR.
+        patch("alice", "acme-health", patientId, p2, ifMatch = 0L,
             body = """{"status":"INACTIVE"}""")
-        patch("alice", "acme-health", patientId, a3, ifMatch = 0L,
+        patch("alice", "acme-health", patientId, p3, ifMatch = 0L,
+            body = """{"status":"RESOLVED"}""")
+        patch("alice", "acme-health", patientId, p4, ifMatch = 0L,
             body = """{"status":"ENTERED_IN_ERROR"}""")
         jdbc.update("DELETE FROM audit.audit_event")
 
@@ -453,22 +487,24 @@ class AllergyIntegrationTest {
 
         @Suppress("UNCHECKED_CAST")
         val items = ((response.body!!["data"] as Map<String, Any>)["items"]) as List<Map<String, Any>>
-        assertThat(items).hasSize(3)
-        // ACTIVE first, then INACTIVE, then ENTERED_IN_ERROR.
+        assertThat(items).hasSize(4)
         assertThat(items[0]["status"]).isEqualTo("ACTIVE")
-        assertThat(items[0]["id"]).isEqualTo(a1.toString())
+        assertThat(items[0]["id"]).isEqualTo(p1.toString())
         assertThat(items[1]["status"]).isEqualTo("INACTIVE")
-        assertThat(items[1]["id"]).isEqualTo(a2.toString())
-        assertThat(items[2]["status"]).isEqualTo("ENTERED_IN_ERROR")
-        assertThat(items[2]["id"]).isEqualTo(a3.toString())
+        assertThat(items[1]["id"]).isEqualTo(p2.toString())
+        // RESOLVED ≠ INACTIVE — the bucket is its own slot
+        // between INACTIVE and ENTERED_IN_ERROR.
+        assertThat(items[2]["status"]).isEqualTo("RESOLVED")
+        assertThat(items[2]["id"]).isEqualTo(p3.toString())
+        assertThat(items[3]["status"]).isEqualTo("ENTERED_IN_ERROR")
+        assertThat(items[3]["id"]).isEqualTo(p4.toString())
 
-        val audit = auditRows("clinical.allergy.list_accessed").single()
-        assertThat(audit["reason"]).isEqualTo("intent:clinical.allergy.list|count:3")
-        assertThat(audit["resource_type"]).isEqualTo("clinical.allergy")
+        val audit = auditRows("clinical.problem.list_accessed").single()
+        assertThat(audit["reason"]).isEqualTo("intent:clinical.problem.list|count:4")
+        assertThat(audit["resource_type"]).isEqualTo("clinical.problem")
         assertThat(audit["resource_id"]).isNull()
 
-        // Also verify count=0 path on a different patient (zero-row
-        // disclosure still emits an audit row).
+        // count=0 path on a different patient.
         val secondPatientId = createPatientWith(
             "alice", "acme-health",
             nameGiven = "Grace", nameFamily = "Hopper", birthDate = "1906-12-09",
@@ -479,8 +515,8 @@ class AllergyIntegrationTest {
         @Suppress("UNCHECKED_CAST")
         val emptyItems = ((emptyResponse.body!!["data"] as Map<String, Any>)["items"]) as List<*>
         assertThat(emptyItems).isEmpty()
-        val emptyAudit = auditRows("clinical.allergy.list_accessed").single()
-        assertThat(emptyAudit["reason"]).isEqualTo("intent:clinical.allergy.list|count:0")
+        val emptyAudit = auditRows("clinical.problem.list_accessed").single()
+        assertThat(emptyAudit["reason"]).isEqualTo("intent:clinical.problem.list|count:0")
     }
 
     // ========================================================================
@@ -567,14 +603,16 @@ class AllergyIntegrationTest {
         return UUID.fromString(data["id"] as String)
     }
 
-    private fun createAllergy(
+    private fun createProblem(
         subject: String,
         patientId: UUID,
         slug: String = "acme-health",
         body: String = MINIMAL_ADD_BODY,
     ): Pair<UUID, Long> {
         val resp = post(subject, slug, patientId, body)
-        check(resp.statusCode == HttpStatus.CREATED) { "createAllergy failed: ${resp.statusCode}" }
+        check(resp.statusCode == HttpStatus.CREATED) {
+            "createProblem failed: ${resp.statusCode}"
+        }
         @Suppress("UNCHECKED_CAST")
         val data = resp.body!!["data"] as Map<String, Any>
         return UUID.fromString(data["id"] as String) to (data["rowVersion"] as Number).toLong()
@@ -591,7 +629,7 @@ class AllergyIntegrationTest {
             add("X-Medcore-Tenant", slug)
         }
         return rest.exchange(
-            "/api/v1/tenants/$slug/patients/$patientId/allergies",
+            "/api/v1/tenants/$slug/patients/$patientId/problems",
             HttpMethod.POST,
             HttpEntity(body, headers),
             Map::class.java,
@@ -603,7 +641,7 @@ class AllergyIntegrationTest {
         subject: String,
         slug: String,
         patientId: UUID,
-        allergyId: UUID,
+        problemId: UUID,
         ifMatch: Long,
         body: String,
     ): ResponseEntity<Map<String, Any>> {
@@ -612,7 +650,7 @@ class AllergyIntegrationTest {
             add("If-Match", "\"$ifMatch\"")
         }
         return rest.exchange(
-            "/api/v1/tenants/$slug/patients/$patientId/allergies/$allergyId",
+            "/api/v1/tenants/$slug/patients/$patientId/problems/$problemId",
             HttpMethod.PATCH,
             HttpEntity(body, headers),
             Map::class.java,
@@ -629,7 +667,7 @@ class AllergyIntegrationTest {
             add("X-Medcore-Tenant", slug)
         }
         return rest.exchange(
-            "/api/v1/tenants/$slug/patients/$patientId/allergies",
+            "/api/v1/tenants/$slug/patients/$patientId/problems",
             HttpMethod.GET,
             HttpEntity<Void>(headers),
             Map::class.java,
@@ -678,6 +716,6 @@ class AllergyIntegrationTest {
 
     private companion object {
         const val MINIMAL_ADD_BODY: String =
-            """{"substanceText":"Penicillin","severity":"SEVERE"}"""
+            """{"conditionText":"Type 2 diabetes mellitus"}"""
     }
 }

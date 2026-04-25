@@ -61,6 +61,7 @@ class UpdateTenantDisplayNameIntegrationTest {
         jdbc.update("DELETE FROM audit.audit_event")
         jdbc.update("DELETE FROM clinical.patient_mrn_counter")
         jdbc.update("DELETE FROM clinical.patient_identifier")
+        jdbc.update("DELETE FROM clinical.problem")
         jdbc.update("DELETE FROM clinical.allergy")
         jdbc.update("DELETE FROM clinical.patient")
         jdbc.update("DELETE FROM tenancy.tenant_membership")
