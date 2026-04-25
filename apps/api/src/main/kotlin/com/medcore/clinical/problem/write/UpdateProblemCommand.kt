@@ -86,18 +86,14 @@ data class UpdateProblemCommand(
     val onsetDate: Patchable<LocalDate> = Patchable.Absent,
     val abatementDate: Patchable<LocalDate> = Patchable.Absent,
     val status: Patchable<ProblemStatus> = Patchable.Absent,
-) {
-    /**
-     * Closed set of camelCase field names the caller is
-     * attempting to change. Used by the auditor to populate the
-     * `fields:<csv>` reason slug. Order matches declaration so
-     * forensic consumers can rely on it (alphabetisation would
-     * obscure intent).
-     */
-    fun changingFieldNames(): Set<String> = buildSet {
-        if (severity !is Patchable.Absent) add("severity")
-        if (onsetDate !is Patchable.Absent) add("onsetDate")
-        if (abatementDate !is Patchable.Absent) add("abatementDate")
-        if (status !is Patchable.Absent) add("status")
-    }
-}
+)
+// `changingFieldNames()` deliberately omitted: unlike
+// UpdatePatientDemographicsCommand / UpdateAllergyCommand which
+// expose a top-level "fields requested for change" set, the
+// problem update flow tracks ACTUALLY-changed fields inside
+// UpdateProblemHandler (the per-field apply*() helpers return
+// the field name only when the value really moved). The auditor
+// reads `result.changedFields` from the handler outcome — never
+// the command's intended set — so a "user PATCHed severity:MILD
+// to MILD" no-op never appears in the audit slug. A method that
+// returned "intended-to-change" fields would be dead code.

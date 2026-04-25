@@ -532,15 +532,19 @@ function ProblemManageModal({
 
 function statusBadgeClassName(status: ProblemStatus): string {
   // Distinct visual treatment per status — RESOLVED gets its
-  // own muted-success styling so it cannot visually collide
-  // with INACTIVE (load-bearing RESOLVED ≠ INACTIVE).
+  // own success-token styling so it cannot visually collide
+  // with INACTIVE (load-bearing RESOLVED ≠ INACTIVE). The
+  // `success` semantic token was added to apps/web/src/index.css
+  // alongside this slice (first consumer); future RESOLVED-like
+  // surfaces (e.g. encounters reaching FINISHED with all notes
+  // signed) can reuse it.
   switch (status) {
     case 'ACTIVE':
       return 'bg-primary/15 text-primary rounded-full px-2 py-0.5 text-xs font-semibold'
     case 'INACTIVE':
       return 'bg-secondary text-secondary-foreground rounded-full px-2 py-0.5 text-xs font-semibold'
     case 'RESOLVED':
-      return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 rounded-full px-2 py-0.5 text-xs font-semibold'
+      return 'bg-success/15 text-success rounded-full px-2 py-0.5 text-xs font-semibold'
     case 'ENTERED_IN_ERROR':
       return 'bg-destructive/15 text-destructive rounded-full px-2 py-0.5 text-xs font-semibold'
   }

@@ -171,11 +171,27 @@ class ProblemIntegrationTest {
     }
 
     // ========================================================================
-    // 5 — Cross-tenant patient → 404 (no existence leak)
+    // 5 — Non-member POST refused — 403 (NOT a 404 leak path)
     // ========================================================================
+    //
+    // This is the "alice is not a member of tenant B" path. The
+    // policy gate runs before any DB lookup and refuses with 403
+    // INSUFFICIENT_AUTHORITY (the AuthorityResolver returns
+    // Denied). The status is deterministic at this layer.
+    //
+    // The "no existence leak" 404 invariant covers a DIFFERENT
+    // path: alice IS a member of tenant B, but probes a patientId
+    // that belongs to tenant A. There the handler's tenant-id
+    // verification short-circuits and we return 404 indistinguishable
+    // from "unknown patient". Constructing that scenario requires
+    // alice to be a multi-tenant member, which the existing test
+    // helpers don't model in 4E.2. Tracked as a follow-up cross-
+    // tenant leak test alongside the future multi-tenant member
+    // helper. For now this test locks down the 403 path
+    // deterministically so the policy gate can't silently flip.
 
     @Test
-    fun `cross-tenant patient probe returns 404 — no existence leak`() {
+    fun `non-member POST is refused with 403`() {
         // Tenant A with patient.
         val (_, _, aPatientId) = seedOwnerAndPatient("alice")
 
@@ -186,10 +202,7 @@ class ProblemIntegrationTest {
 
         // Alice tries to add a problem on her own patient via tenant B.
         val response = post("alice", "rival-health", aPatientId, MINIMAL_ADD_BODY)
-        // 403 (not member of B) is acceptable; 404 if RLS-policy
-        // refuses earlier. Either is "no existence leak"; we assert
-        // the response is NOT 201.
-        assertThat(response.statusCode).isIn(HttpStatus.FORBIDDEN, HttpStatus.NOT_FOUND)
+        assertThat(response.statusCode).isEqualTo(HttpStatus.FORBIDDEN)
     }
 
     // ========================================================================

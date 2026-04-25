@@ -271,11 +271,27 @@ describe('<ProblemsCard />', () => {
   })
 
   it('surfaces problem_invalid_transition error message when backend refuses', async () => {
-    // Defensive: even though the UI should never offer the
-    // RESOLVED → INACTIVE button, if a future regression slips
-    // a request through (or a parallel session race), the
-    // backend 409 response surfaces an actionable error message
-    // explaining the legal paths.
+    // Defensive: tests the response-handler reason→copy mapping
+    // for the `problem_invalid_transition` 409. The mock returns
+    // that reason for an ACTIVE→RESOLVED click — which is NOT a
+    // realistic backend response (the real backend only returns
+    // `problem_invalid_transition` for a RESOLVED→INACTIVE PATCH,
+    // and the UI structurally doesn't expose that path on a
+    // RESOLVED row — see the previous test).
+    //
+    // The realistic scenario where this 409 reaches the UI is
+    // a parallel-session race: another tab transitioned the row
+    // to RESOLVED + the user's stale UI tries a transition the
+    // RESOLVED state forbids. The fixture simulates that 409
+    // arriving at the response handler so we can lock down the
+    // copy ("recurrence" + "entered in error") without seeding
+    // the multi-session flow itself.
+    //
+    // A future fixture that seeds a RESOLVED row + drives the
+    // recurrence button would test the success path; this one
+    // tests the error-rendering path defensively. The backend
+    // contract test (ProblemIntegrationTest #13) covers the
+    // realistic API-side scenario.
     fetchSpy.mockImplementation((input, init) => {
       const url = String(input)
       const method = String(init?.method ?? 'GET').toUpperCase()
