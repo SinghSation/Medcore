@@ -575,6 +575,234 @@ describe('<EncounterDetailPage />', () => {
   })
 
   // =====================================================================
+  // Note amendments (Phase 4D.6 — new)
+  // =====================================================================
+
+  it('shows Amend button on SIGNED non-amendment notes only', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-a1', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [
+        signedNoteOf('n-signed', 'signed body', {
+          signedAt: '2026-04-24T10:30:00Z',
+          signedBy: 'u-42',
+        }),
+        noteOf('n-draft', 'draft body'),
+      ],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a1')
+    await screen.findByTestId('notes-list')
+
+    // Exactly one Amend button — on the signed, non-amendment row.
+    const amendButtons = screen.getAllByTestId('amend-note-button')
+    expect(amendButtons).toHaveLength(1)
+  })
+
+  it('hides Amend button on DRAFT notes (cannot amend an unsigned note)', async () => {
+    routeMock({
+      encounter: encounter({ id: 'e-a2', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [noteOf('n-draft', 'still draft')],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a2')
+    await screen.findByTestId('notes-list')
+
+    expect(screen.queryByTestId('amend-note-button')).not.toBeInTheDocument()
+  })
+
+  it('hides Amend button on amendments (single-level chain rule)', async () => {
+    // Backend rejects amendment-of-amendment; frontend hides
+    // the button so the user never sees an option that would
+    // 409 anyway. This mirrors V23 + handler enforcement.
+    const original = signedNoteOf('orig-1', 'original body', {
+      signedAt: '2026-04-24T10:00:00Z',
+      signedBy: 'u-42',
+    })
+    const amendment = {
+      ...signedNoteOf('amend-1', 'amendment body', {
+        signedAt: '2026-04-24T11:00:00Z',
+        signedBy: 'u-42',
+      }),
+      amendsId: 'orig-1',
+    }
+    routeMock({
+      encounter: encounter({ id: 'e-a3', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [original, amendment],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a3')
+    await screen.findByTestId('notes-list')
+
+    // Original is SIGNED non-amendment → Amend button visible.
+    // Amendment is SIGNED but `amendsId` is set → Amend button NOT visible.
+    expect(screen.getAllByTestId('amend-note-button')).toHaveLength(1)
+    // Both rows render; amendment row carries the marker attribute.
+    const rows = screen.getAllByTestId('note-row')
+    expect(rows).toHaveLength(2)
+    const amendmentRow = rows.find(
+      (r) => r.getAttribute('data-note-is-amendment') === 'true',
+    )
+    expect(amendmentRow).toBeDefined()
+  })
+
+  it('submitting an amendment threads it under the original after refetch', async () => {
+    const original = signedNoteOf('orig-2', 'original body', {
+      signedAt: '2026-04-24T10:00:00Z',
+      signedBy: 'u-42',
+    })
+    const amendment = {
+      ...noteOf('amend-2', 'amendment body'),
+      amendsId: 'orig-2',
+    }
+    let amended = false
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input)
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (url.endsWith('/amend') && method === 'POST') {
+        amended = true
+        return Promise.resolve(jsonResponse(201, { data: amendment, requestId: 'r' }))
+      }
+      if (url.endsWith('/notes') && method === 'GET') {
+        return Promise.resolve(
+          jsonResponse(200, {
+            data: { items: amended ? [original, amendment] : [original] },
+            requestId: 'r',
+          }),
+        )
+      }
+      // encounter GET
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: encounter({ id: 'e-a4', patientId: 'p-1', status: 'IN_PROGRESS' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a4')
+    await screen.findByTestId('notes-list')
+    await userEvent.click(screen.getByTestId('amend-note-button'))
+
+    const editor = await screen.findByTestId('amend-note-textarea')
+    expect(editor).toHaveValue('original body') // pre-filled with original body
+
+    // Replace the text and save.
+    await userEvent.clear(editor)
+    await userEvent.type(editor, 'Correction: dosage was wrong.')
+    await userEvent.click(screen.getByTestId('amend-save-button'))
+
+    // Wait for the amendment row to appear nested under the
+    // original (via the threading container).
+    const thread = await screen.findByTestId('note-amendments-thread')
+    expect(thread).toBeInTheDocument()
+    // The nested row carries the data-note-is-amendment marker
+    // and the Amendment status badge.
+    const amendmentRow = thread.querySelector('[data-note-is-amendment="true"]')
+    expect(amendmentRow).not.toBeNull()
+  })
+
+  it('shows Amended badge on the original once an amendment exists', async () => {
+    const original = signedNoteOf('orig-3', 'original body', {
+      signedAt: '2026-04-24T10:00:00Z',
+      signedBy: 'u-42',
+    })
+    const amendment = {
+      ...noteOf('amend-3', 'amendment body'),
+      amendsId: 'orig-3',
+    }
+    routeMock({
+      encounter: encounter({ id: 'e-a5', patientId: 'p-1', status: 'IN_PROGRESS' }),
+      notes: [original, amendment],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a5')
+    await screen.findByTestId('notes-list')
+
+    const badge = await screen.findByTestId('note-amended-badge')
+    expect(badge).toHaveTextContent('Amended')
+  })
+
+  it('Sign button on a draft amendment is visible even when encounter is FINISHED (chunk B.5 carve-out)', async () => {
+    // Cross-slice proof: chunk B.5 allows signing amendments
+    // regardless of encounter status. The frontend mirrors that.
+    const original = signedNoteOf('orig-4', 'original body', {
+      signedAt: '2026-04-24T10:00:00Z',
+      signedBy: 'u-42',
+    })
+    const draftAmendment = {
+      ...noteOf('amend-4', 'amendment body'),
+      amendsId: 'orig-4',
+    }
+    routeMock({
+      encounter: encounter({
+        id: 'e-a6',
+        patientId: 'p-1',
+        status: 'FINISHED',
+        startedAt: '2026-04-24T10:00:00Z',
+      }),
+      notes: [original, draftAmendment],
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a6')
+    await screen.findByTestId('notes-list')
+
+    // Sign button visible specifically because the draft is an
+    // amendment. A non-amendment draft on a FINISHED encounter
+    // would not show Sign (covered by the existing
+    // "hides ... Sign button when status is FINISHED" test).
+    const signButtons = screen.getAllByTestId('sign-note-button')
+    expect(signButtons).toHaveLength(1)
+    // No Amend button on the closed encounter's signed original?
+    // Actually amend IS allowed on closed encounters per locked
+    // plan — the signed original should still show Amend.
+    expect(screen.getByTestId('amend-note-button')).toBeInTheDocument()
+  })
+
+  it('handles 409 cannot_amend_unsigned_note with a user-facing message', async () => {
+    const original = signedNoteOf('orig-5', 'original body', {
+      signedAt: '2026-04-24T10:00:00Z',
+      signedBy: 'u-42',
+    })
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input)
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (url.endsWith('/amend') && method === 'POST') {
+        return Promise.resolve(
+          jsonResponse(409, {
+            code: 'resource.conflict',
+            details: { reason: 'cannot_amend_unsigned_note' },
+          }),
+        )
+      }
+      if (url.endsWith('/notes') && method === 'GET') {
+        return Promise.resolve(
+          jsonResponse(200, { data: { items: [original] }, requestId: 'r' }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          data: encounter({ id: 'e-a7', patientId: 'p-1', status: 'IN_PROGRESS' }),
+          requestId: 'r',
+        }),
+      )
+    })
+
+    renderAt('/tenants/acme-health/encounters/e-a7')
+    await screen.findByTestId('notes-list')
+    await userEvent.click(screen.getByTestId('amend-note-button'))
+    const editor = await screen.findByTestId('amend-note-textarea')
+    await userEvent.clear(editor)
+    await userEvent.type(editor, 'Attempted amendment')
+    await userEvent.click(screen.getByTestId('amend-save-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('amend-note-error')).toHaveTextContent(
+        /no longer signed|refresh/i,
+      )
+    })
+  })
+
+  // =====================================================================
   // Helpers
   // =====================================================================
 

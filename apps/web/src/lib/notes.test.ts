@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createEncounterNote, listEncounterNotes } from '@/lib/notes'
+import {
+  amendEncounterNote,
+  createEncounterNote,
+  listEncounterNotes,
+} from '@/lib/notes'
 import { ApiError } from '@/lib/api-client'
 import { clearToken, setToken } from '@/lib/auth'
 
@@ -95,6 +99,76 @@ describe('encounter notes API client', () => {
         encounterId: 'missing',
       }),
     ).rejects.toMatchObject({ status: 404 })
+  })
+
+  // --- Phase 4D.6: amend ---
+
+  it('amendEncounterNote POSTs to /amend with body + bearer + tenant headers', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(201, {
+        data: { ...noteOf('amend-1'), amendsId: 'orig-1' },
+        requestId: 'r',
+      }),
+    )
+
+    await amendEncounterNote({
+      tenantSlug: 'acme-health',
+      encounterId: 'e-1',
+      noteId: 'orig-1',
+      body: 'Correction: dosage was wrong.',
+    })
+
+    const [url, init] = fetchSpy.mock.calls.at(-1)!
+    expect(url).toBe('/api/v1/tenants/acme-health/encounters/e-1/notes/orig-1/amend')
+    const req = init as RequestInit
+    expect(req.method).toBe('POST')
+    expect(JSON.parse(req.body as string)).toEqual({
+      body: 'Correction: dosage was wrong.',
+    })
+    const headers = new Headers(req.headers)
+    expect(headers.get('Authorization')).toBe('Bearer notes-token')
+    expect(headers.get('X-Medcore-Tenant')).toBe('acme-health')
+    expect(headers.get('Content-Type')).toBe('application/json')
+  })
+
+  it('propagates ApiError(409) with details.reason on conflict surfaces', async () => {
+    // The platform contract: every 409 carries details.reason.
+    // The lib propagates the raw body so callers (e.g.
+    // EncounterDetailPage) can dispatch on it.
+    fetchSpy.mockResolvedValue(
+      jsonResponse(409, {
+        code: 'resource.conflict',
+        details: { reason: 'cannot_amend_unsigned_note' },
+      }),
+    )
+
+    const error = await amendEncounterNote({
+      tenantSlug: 'acme-health',
+      encounterId: 'e-1',
+      noteId: 'still-draft',
+      body: 'attempt',
+    }).catch((err: unknown) => err)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).toMatchObject({ status: 409 })
+    expect((error as ApiError).body).toMatchObject({
+      details: { reason: 'cannot_amend_unsigned_note' },
+    })
+  })
+
+  it('propagates ApiError(403) when caller lacks NOTE_WRITE', async () => {
+    fetchSpy.mockResolvedValue(
+      jsonResponse(403, { error: { code: 'auth.forbidden' } }),
+    )
+
+    await expect(
+      amendEncounterNote({
+        tenantSlug: 'acme-health',
+        encounterId: 'e-1',
+        noteId: 'orig-1',
+        body: 'denied',
+      }),
+    ).rejects.toMatchObject({ status: 403 })
   })
 
   function noteOf(id: string) {
