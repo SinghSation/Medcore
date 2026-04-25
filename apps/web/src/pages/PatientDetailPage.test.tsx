@@ -391,7 +391,7 @@ describe('<PatientDetailPage />', () => {
       if (url.endsWith('/encounters')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: { items: opts.encounters },
+            data: pagedDataMock(opts.encounters),
             requestId: 'r',
           }),
         )

@@ -20,7 +20,7 @@ same comment "Adding pagination is additive in a later slice":
 - `GET /api/v1/tenants/{slug}/patients/{patientId}/problems` (4E.2)
 
 CodeRabbit flagged 4E.2 as a coding-guideline violation
-(`.cursor/rules/04-frontend-standards.mdc`: "List endpoints MUST be
+(`.cursor/rules/02-api-contracts.mdc`: "List endpoints MUST be
 paginated with default and maximum page sizes declared in the
 schema"). Fixing only one endpoint introduces per-domain divergence
 across identical-shape APIs. Fixing all four requires a substrate

@@ -128,8 +128,8 @@ describe('<ProblemsCard />', () => {
       if (url.endsWith('/problems')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: addedYet
+            data: pagedDataMock(
+              addedYet
                 ? [
                     problemOf('p-new', {
                       status: 'ACTIVE',
@@ -137,7 +137,7 @@ describe('<ProblemsCard />', () => {
                     }),
                   ]
                 : [],
-            },
+            ),
             requestId: 'r',
           }),
         )

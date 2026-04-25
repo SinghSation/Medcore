@@ -211,8 +211,8 @@ describe('<AllergyBanner />', () => {
       if (url.endsWith('/allergies')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: transitioned
+            data: pagedDataMock(
+              transitioned
                 ? [
                     allergyOf('a-1', {
                       status: 'INACTIVE',
@@ -226,7 +226,7 @@ describe('<AllergyBanner />', () => {
                       substanceText: 'Penicillin',
                     }),
                   ],
-            },
+            ),
             requestId: 'r',
           }),
         )

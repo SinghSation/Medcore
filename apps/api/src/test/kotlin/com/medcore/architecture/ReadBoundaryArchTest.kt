@@ -78,17 +78,22 @@ class ReadBoundaryArchTest {
      * `*ListResponse` class without `pageInfo` and without an
      * allowlist entry breaks this test loudly.
      *
-     * **Allowlist policy**:
+     * **Allowlist policy** (post-chunk-E, final state):
      *   - `PatientListResponse` — uses offset-based pagination
      *     under a different scheme (`{items, totalCount, limit,
      *     offset, hasMore}`), shipped pre-substrate. ADR-009
      *     §1 explicitly leaves it alone unless clean unification
      *     is trivial; until then it's a documented exception.
-     *   - Others: progressively migrated. As of chunk B,
-     *     `EncounterNoteListResponse` is paginated;
-     *     `AllergyListResponse`, `EncounterListResponse`,
-     *     `ProblemListResponse` are still on the allowlist
-     *     and migrate in chunks C/D/E.
+     *   - `MembershipListResponse` — out of the longitudinal-
+     *     clinical-list scope ADR-009 governs; bounded by tenant
+     *     count.
+     *
+     * All four longitudinal clinical lists (encounter-notes,
+     * encounters, allergies, problems) migrated to the substrate
+     * in chunks B–E and now declare `pageInfo`. Adding a new
+     * `*ListResponse` without `pageInfo` and without an entry
+     * in [LEGACY_UNPAGINATED_LIST_RESPONSES] (with rationale)
+     * breaks this test loudly.
      *
      * Implemented as a JUnit test (rather than an ArchUnit
      * `@ArchTest` rule) because field-existence checks are
@@ -106,17 +111,17 @@ class ReadBoundaryArchTest {
                     jc.simpleName !in LEGACY_UNPAGINATED_LIST_RESPONSES
             }
 
-        // Sanity check — there should be at least one paginated
-        // class for the test to be meaningful. As of chunk B
-        // that's `EncounterNoteListResponse`. If this assertion
-        // fails after chunks C–E, it means every list class is
-        // somehow on the legacy allowlist — a regression.
+        // Sanity check — at least one paginated class must
+        // exist for the test to be meaningful. Post-chunk-E
+        // there are four (notes, encounters, allergies,
+        // problems). If this assertion fails it means every
+        // list class is somehow on the legacy allowlist — a
+        // regression worth screaming about.
         assertThat(classes)
             .describedAs(
                 "At least one paginated *ListResponse class must " +
-                    "exist (chunk B paginated EncounterNoteListResponse). " +
-                    "If this assertion fails, the substrate is not yet " +
-                    "applied to any endpoint.",
+                    "exist. Post-chunk-E expected: notes, encounters, " +
+                    "allergies, problems — all four substrate adopters.",
             )
             .isNotEmpty
 
