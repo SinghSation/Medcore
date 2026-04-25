@@ -51,6 +51,9 @@ object MembershipRoleAuthorities {
         // Allergies (clinical) — full access (Phase 4E.1).
         MedcoreAuthority.ALLERGY_READ,
         MedcoreAuthority.ALLERGY_WRITE,
+        // Problems (clinical) — full access (Phase 4E.2).
+        MedcoreAuthority.PROBLEM_READ,
+        MedcoreAuthority.PROBLEM_WRITE,
     )
 
     val ADMIN_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -76,6 +79,9 @@ object MembershipRoleAuthorities {
         // Allergies (clinical) — full access (Phase 4E.1).
         MedcoreAuthority.ALLERGY_READ,
         MedcoreAuthority.ALLERGY_WRITE,
+        // Problems (clinical) — full access (Phase 4E.2).
+        MedcoreAuthority.PROBLEM_READ,
+        MedcoreAuthority.PROBLEM_WRITE,
     )
 
     val MEMBER_AUTHORITIES: Set<MedcoreAuthority> = setOf(
@@ -96,6 +102,13 @@ object MembershipRoleAuthorities {
         // is a clinical-safety concern: every member who reads
         // a chart must see the allergies, even read-only roles.
         MedcoreAuthority.ALLERGY_READ,
+        // Problems — READ only (Phase 4E.2). Problem list is
+        // chart-context: every viewer of a chart needs to see
+        // the patient's diagnostic state, even read-only roles.
+        // Distinct from allergies (chart-context vs safety-banner)
+        // per the locked Q6 — but the read-everywhere posture is
+        // identical.
+        MedcoreAuthority.PROBLEM_READ,
     )
 
     private val MAPPING: Map<MembershipRole, Set<MedcoreAuthority>> = mapOf(

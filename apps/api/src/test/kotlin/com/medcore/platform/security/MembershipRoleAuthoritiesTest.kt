@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test
 class MembershipRoleAuthoritiesTest {
 
     @Test
-    fun `OWNER holds every tenancy + patient + encounter + note + allergy authority including TENANT_DELETE`() {
+    fun `OWNER holds every tenancy + patient + encounter + note + allergy + problem authority including TENANT_DELETE`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.OWNER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -32,6 +32,8 @@ class MembershipRoleAuthoritiesTest {
                 MedcoreAuthority.NOTE_SIGN,
                 MedcoreAuthority.ALLERGY_READ,
                 MedcoreAuthority.ALLERGY_WRITE,
+                MedcoreAuthority.PROBLEM_READ,
+                MedcoreAuthority.PROBLEM_WRITE,
             )
     }
 
@@ -60,10 +62,15 @@ class MembershipRoleAuthoritiesTest {
         // terminality) live in the handler, not the authority
         // surface — both roles share write rights at this layer.
         assertThat(admin).contains(MedcoreAuthority.ALLERGY_WRITE)
+        // Both OWNER and ADMIN hold PROBLEM_WRITE (Phase 4E.2).
+        // RESOLVED ≠ INACTIVE distinction and the legal
+        // transition graph live in the handler — same
+        // separation as ALLERGY_WRITE.
+        assertThat(admin).contains(MedcoreAuthority.PROBLEM_WRITE)
     }
 
     @Test
-    fun `MEMBER holds READ authorities (patient, encounter, note, allergy) but no writes`() {
+    fun `MEMBER holds READ authorities (patient, encounter, note, allergy, problem) but no writes`() {
         assertThat(MembershipRoleAuthorities.forRole(MembershipRole.MEMBER))
             .containsExactlyInAnyOrder(
                 MedcoreAuthority.TENANT_READ,
@@ -80,9 +87,13 @@ class MembershipRoleAuthoritiesTest {
                 // visibility is a clinical-safety concern; even
                 // read-only roles must see allergies on every chart.
                 MedcoreAuthority.ALLERGY_READ,
+                // Phase 4E.2: read-only access to the problem list.
+                // Chart-context surface; every chart viewer needs
+                // diagnostic state.
+                MedcoreAuthority.PROBLEM_READ,
             )
         // Explicitly confirm MEMBER cannot mutate patient, encounter,
-        // note, or allergy records — including signing notes (4D.5).
+        // note, allergy, or problem records — including signing notes (4D.5).
         val member = MembershipRoleAuthorities.forRole(MembershipRole.MEMBER)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_CREATE)
         assertThat(member).doesNotContain(MedcoreAuthority.PATIENT_UPDATE)
@@ -90,6 +101,7 @@ class MembershipRoleAuthoritiesTest {
         assertThat(member).doesNotContain(MedcoreAuthority.NOTE_WRITE)
         assertThat(member).doesNotContain(MedcoreAuthority.NOTE_SIGN)
         assertThat(member).doesNotContain(MedcoreAuthority.ALLERGY_WRITE)
+        assertThat(member).doesNotContain(MedcoreAuthority.PROBLEM_WRITE)
     }
 
     @Test

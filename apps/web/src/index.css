@@ -21,6 +21,12 @@
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
+  /* Success — clinical-outcome positive (e.g. RESOLVED problem
+     state). Distinct from primary so RESOLVED ≠ INACTIVE stays
+     visually load-bearing. Phase 4E.2; first consumer is the
+     ProblemsCard RESOLVED status badge. */
+  --success: oklch(0.65 0.15 150);
+  --success-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -43,6 +49,11 @@
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.985 0 0);
+  /* Success — dark-mode counterpart. Lifted lightness + reduced
+     chroma so the chip remains legible against dark surfaces
+     while preserving its distinct identity vs primary/secondary. */
+  --success: oklch(0.72 0.15 150);
+  --success-foreground: oklch(0.145 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -70,6 +81,8 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

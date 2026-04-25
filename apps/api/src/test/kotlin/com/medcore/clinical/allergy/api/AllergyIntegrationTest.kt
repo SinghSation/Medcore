@@ -53,6 +53,7 @@ class AllergyIntegrationTest {
     fun reset() {
         jdbc = JdbcTemplate(dataSource)
         jdbc.update("DELETE FROM audit.audit_event")
+        jdbc.update("DELETE FROM clinical.problem")
         jdbc.update("DELETE FROM clinical.allergy")
         jdbc.update("DELETE FROM clinical.encounter_note")
         jdbc.update("DELETE FROM clinical.encounter")
