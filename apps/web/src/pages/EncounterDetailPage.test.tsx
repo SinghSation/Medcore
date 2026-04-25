@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '@/providers/AuthProvider'
 import { EncounterDetailPage } from '@/pages/EncounterDetailPage'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('<EncounterDetailPage />', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -172,7 +173,7 @@ describe('<EncounterDetailPage />', () => {
       if (url.endsWith('/notes')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: { items: savedNote ? [savedNote] : [] },
+            data: pagedDataMock(savedNote ? [savedNote] : []),
             requestId: 'r',
           }),
         )
@@ -213,7 +214,7 @@ describe('<EncounterDetailPage />', () => {
       }
       if (url.endsWith('/notes')) {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock([]), requestId: 'r' }),
         )
       }
       return Promise.resolve(
@@ -345,7 +346,7 @@ describe('<EncounterDetailPage />', () => {
       if (url.endsWith('/notes')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: { items: [noteOf('n-draft', 'Draft body')] },
+            data: pagedDataMock([noteOf('n-draft', 'Draft body')]),
             requestId: 'r',
           }),
         )
@@ -474,7 +475,7 @@ describe('<EncounterDetailPage />', () => {
       }
       if (url.endsWith('/notes')) {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock([]), requestId: 'r' }),
         )
       }
       // encounter GET — returns CANCELLED after /cancel succeeds.
@@ -539,14 +540,12 @@ describe('<EncounterDetailPage />', () => {
       if (url.endsWith('/notes')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: [
-                signedNoteOf('n-signed', 'stale cache', {
-                  signedAt: '2026-04-24T10:00:00Z',
-                  signedBy: 'u-42',
-                }),
-              ],
-            },
+            data: pagedDataMock([
+              signedNoteOf('n-signed', 'stale cache', {
+                signedAt: '2026-04-24T10:00:00Z',
+                signedBy: 'u-42',
+              }),
+            ]),
             requestId: 'r',
           }),
         )
@@ -665,7 +664,7 @@ describe('<EncounterDetailPage />', () => {
       if (url.endsWith('/notes') && method === 'GET') {
         return Promise.resolve(
           jsonResponse(200, {
-            data: { items: amended ? [original, amendment] : [original] },
+            data: pagedDataMock(amended ? [original, amendment] : [original]),
             requestId: 'r',
           }),
         )
@@ -776,7 +775,7 @@ describe('<EncounterDetailPage />', () => {
       }
       if (url.endsWith('/notes') && method === 'GET') {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: [original] }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock([original]), requestId: 'r' }),
         )
       }
       return Promise.resolve(
@@ -840,7 +839,7 @@ describe('<EncounterDetailPage />', () => {
       const url = String(input)
       if (url.endsWith('/notes')) {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: opts.notes }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock(opts.notes), requestId: 'r' }),
         )
       }
       return Promise.resolve(

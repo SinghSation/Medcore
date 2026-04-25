@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AllergyBanner } from '@/components/AllergyBanner'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('<AllergyBanner />', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -134,8 +135,8 @@ describe('<AllergyBanner />', () => {
       if (url.endsWith('/allergies')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: addedYet
+            data: pagedDataMock(
+              addedYet
                 ? [
                     allergyOf('a-new', {
                       status: 'ACTIVE',
@@ -143,7 +144,7 @@ describe('<AllergyBanner />', () => {
                     }),
                   ]
                 : [],
-            },
+            ),
             requestId: 'r',
           }),
         )
@@ -270,15 +271,13 @@ describe('<AllergyBanner />', () => {
       if (url.endsWith('/allergies')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: [
-                allergyOf('a-1', {
-                  status: 'ACTIVE',
-                  substanceText: 'Penicillin',
-                  rowVersion: 0,
-                }),
-              ],
-            },
+            data: pagedDataMock([
+              allergyOf('a-1', {
+                status: 'ACTIVE',
+                substanceText: 'Penicillin',
+                rowVersion: 0,
+              }),
+            ]),
             requestId: 'r',
           }),
         )
@@ -325,7 +324,7 @@ describe('<AllergyBanner />', () => {
     fetchSpy.mockImplementation(() =>
       Promise.resolve(
         jsonResponse(200, {
-          data: { items: opts.items },
+          data: pagedDataMock(opts.items),
           requestId: 'r',
         }),
       ),

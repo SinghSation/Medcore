@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/lib/api-client'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 import {
   addProblem,
   listPatientProblems,
@@ -26,7 +27,7 @@ describe('problems API client', () => {
   it('listPatientProblems GETs the list with bearer + tenant headers', async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse(200, {
-        data: { items: [problemOf('p-1')] },
+        data: pagedDataMock([problemOf('p-1')]),
         requestId: 'r',
       }),
     )
