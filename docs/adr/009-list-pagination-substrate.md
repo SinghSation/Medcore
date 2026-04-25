@@ -132,7 +132,7 @@ the corresponding tuple.
 | problems | `(status_priority, createdAt DESC, id)` | `(sp, ts, id)` | `(tenant_id, patient_id, status, created_at, id)` |
 | allergies | `(status_priority, createdAt DESC, id)` | `(sp, ts, id)` | `(tenant_id, patient_id, status, created_at, id)` |
 | encounters | `(createdAt DESC, id)` | `(ts, id)` | `(tenant_id, patient_id, created_at, id)` |
-| encounter-notes | `(createdAt ASC, id)` | `(ts, id, asc)` | `(tenant_id, encounter_id, created_at, id)` |
+| encounter-notes | `(createdAt DESC, id)` | `(ts, id, asc=false)` | `(tenant_id, encounter_id, created_at, id)` |
 
 **`status_priority` mapping (NORMATIVE)**:
 

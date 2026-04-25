@@ -4,31 +4,45 @@ import com.medcore.clinical.encounter.persistence.EncounterNoteEntity
 import com.medcore.clinical.encounter.persistence.EncounterNoteRepository
 import com.medcore.clinical.encounter.persistence.EncounterRepository
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
+import com.medcore.platform.read.pagination.CursorCodec
+import com.medcore.platform.read.pagination.PageResponse
+import com.medcore.platform.read.pagination.TimeCursor
 import com.medcore.platform.write.WriteContext
 import com.medcore.tenancy.persistence.TenantRepository
 import jakarta.persistence.EntityNotFoundException
+import org.springframework.data.domain.Limit
 import org.springframework.stereotype.Component
 
 /**
  * Handler for [ListEncounterNotesCommand] (Phase 4D.1,
- * VS1 Chunk E).
+ * VS1 Chunk E; paginated as of platform-pagination chunk B,
+ * ADR-009).
  *
- * Runs inside [com.medcore.platform.read.ReadGate]'s
- * transaction with both RLS GUCs set by `PhiRlsTxHook`.
+ * Runs inside [com.medcore.platform.read.ReadGate]'s transaction
+ * with both RLS GUCs set by `PhiRlsTxHook`.
  *
  * ### Flow
  *
  * 1. Resolve tenant by slug.
- * 2. Load parent encounter; verify `encounter.tenantId ==
- *    tenant.id`. Cross-tenant = 404 (no existence leak).
- * 3. Fetch notes via
- *    [EncounterNoteRepository.findByEncounterIdOrdered]. The
- *    query runs under V19's SELECT RLS policy — rows the
- *    caller shouldn't see are filtered at the DB layer; a
- *    zero-row result means "no notes yet for this encounter"
- *    (a legitimate disclosure event that still emits an audit
- *    row via [ListEncounterNotesAuditor]).
- * 4. Map entities to [EncounterNoteSnapshot]s.
+ * 2. Load parent encounter; verify `encounter.tenantId == tenant.id`
+ *    (cross-tenant probe → 404 — no existence leak).
+ * 3. Decode the optional cursor (`null` → first page; non-null →
+ *    next page after the encoded `(createdAt, id)` tuple).
+ *    Malformed cursor → [com.medcore.platform.read.pagination.CursorMalformedException]
+ *    → 422 `cursor|malformed` via the global exception handler.
+ * 4. Fetch `pageSize + 1` rows from the repository (the +1 is the
+ *    "peek-ahead" that detects `hasNextPage`).
+ * 5. Hand the over-fetched list to
+ *    [PageResponse.fromFetchedPlusOne] which trims, computes
+ *    `hasNextPage`, and constructs `nextCursor` from the LAST
+ *    row of the trimmed page (NOT the peek-ahead row).
+ *
+ * ### Cursor shape
+ *
+ * `TimeCursor(k = "clinical.encounter_note.v1", ts, id, ascending = false)`.
+ * The `ascending = false` flag documents the DESC sort axis —
+ * useful for forensic / replay tools that decode cursors
+ * without joining the schema.
  */
 @Component
 class ListEncounterNotesHandler(
@@ -50,24 +64,60 @@ class ListEncounterNotesHandler(
             throw EntityNotFoundException("encounter not found: ${command.encounterId}")
         }
 
-        val notes = encounterNoteRepository.findByEncounterIdOrdered(encounter.id)
-        return ListEncounterNotesResult(items = notes.map { toSnapshot(it) })
+        // +1 to detect hasNextPage — see ADR-009 §2.4 + the
+        // PageResponse.fromFetchedPlusOne contract.
+        val pageSize = command.pageRequest.pageSize
+        val limit = Limit.of(pageSize + 1)
+
+        val rawCursor = command.pageRequest.cursor
+        val rows: List<EncounterNoteEntity> = if (rawCursor == null) {
+            encounterNoteRepository.findFirstPage(encounter.id, limit)
+        } else {
+            val map = CursorCodec.decodeMap(rawCursor)
+            val cursor = TimeCursor.fromMap(
+                map = map,
+                expectedKey = CURSOR_K,
+            )
+            encounterNoteRepository.findAfter(
+                encounterId = encounter.id,
+                ts = cursor.ts,
+                id = cursor.id,
+                limit = limit,
+            )
+        }
+
+        return PageResponse.fromFetchedPlusOne(
+            fetchedPlusOne = rows.map { it.toSnapshot() },
+            pageSize = pageSize,
+        ) { last ->
+            TimeCursor(
+                k = CURSOR_K,
+                ts = last.createdAt,
+                id = last.id,
+                ascending = false,
+            )
+        }
     }
 
-    private fun toSnapshot(entity: EncounterNoteEntity): EncounterNoteSnapshot =
+    private fun EncounterNoteEntity.toSnapshot(): EncounterNoteSnapshot =
         EncounterNoteSnapshot(
-            id = entity.id,
-            tenantId = entity.tenantId,
-            encounterId = entity.encounterId,
-            body = entity.body,
-            status = entity.status,
-            signedAt = entity.signedAt,
-            signedBy = entity.signedBy,
-            amendsId = entity.amendsId,
-            createdAt = entity.createdAt,
-            updatedAt = entity.updatedAt,
-            createdBy = entity.createdBy,
-            updatedBy = entity.updatedBy,
-            rowVersion = entity.rowVersion,
+            id = id,
+            tenantId = tenantId,
+            encounterId = encounterId,
+            body = body,
+            status = status,
+            signedAt = signedAt,
+            signedBy = signedBy,
+            amendsId = amendsId,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            createdBy = createdBy,
+            updatedBy = updatedBy,
+            rowVersion = rowVersion,
         )
+
+    private companion object {
+        /** Cursor schema discriminator; bump to `.v2` if the sort axis or fields change. */
+        const val CURSOR_K: String = "clinical.encounter_note.v1"
+    }
 }

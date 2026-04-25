@@ -35,8 +35,16 @@ export interface EncounterNote {
   rowVersion: number
 }
 
+/**
+ * Wire shape of `EncounterNoteListResponse` (paginated as of
+ * platform-pagination chunk B, ADR-009).
+ *
+ * Card surfaces in MVP render the first page only; future
+ * "load more" UX would consume `pageInfo.nextCursor` directly.
+ */
 export interface EncounterNoteList {
   items: EncounterNote[]
+  pageInfo: import('./pagination').PageInfo
 }
 
 export interface CreateEncounterNoteParams {

@@ -1,0 +1,40 @@
+-- V26__encounter_note_pagination_index.sql — platform-pagination chunk B
+--
+-- Covering index for cursor-paginated reads on
+-- `clinical.encounter_note`. ADR-009 §2.5 sort axis:
+-- `(createdAt DESC, id)` — newest first, with `id` as the
+-- tie-break for equal-timestamp rows. The cursor walk's
+-- WHERE clause is:
+--
+--   WHERE tenant_id = :tenant_id
+--     AND encounter_id = :encounter_id
+--     AND ( created_at < :ts_last
+--           OR ( created_at = :ts_last AND id > :id_last ) )
+--   ORDER BY created_at DESC, id DESC
+--   LIMIT :pageSize + 1
+--
+-- The composite index `(tenant_id, encounter_id, created_at,
+-- id)` lets PG index-scan the matching rows directly without a
+-- secondary sort. `created_at` is stored ascending in the index
+-- but PG can scan backward — explicit `DESC` storage is not
+-- required.
+--
+-- ### Why this index, not the existing one
+--
+-- V19's `clinical.encounter_note` already has
+-- `(tenant_id, encounter_id)` indirectly via the FK. For
+-- typical encounters with < 50 notes, sorting on the fly is
+-- cheap. This index becomes load-bearing when a single
+-- encounter accumulates hundreds of notes (research / import
+-- workflows, future amendment chains). Cursor pagination
+-- requires the (tenant, encounter, created_at, id) prefix to
+-- be index-resolvable for stable performance.
+--
+-- ### Rollback
+--
+-- `DROP INDEX IF EXISTS clinical.ix_encounter_note_pagination;`
+-- is safe — pagination falls back to a sort scan, which is
+-- correct but slower at scale. Reversible.
+
+CREATE INDEX IF NOT EXISTS ix_encounter_note_pagination
+    ON clinical.encounter_note (tenant_id, encounter_id, created_at, id);

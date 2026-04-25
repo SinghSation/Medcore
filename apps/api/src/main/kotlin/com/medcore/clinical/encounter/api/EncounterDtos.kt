@@ -295,19 +295,51 @@ data class EncounterNoteResponse(
 /**
  * Wire envelope for
  * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
- * (Phase 4D.1).
+ * (Phase 4D.1; paginated as of platform-pagination chunk B).
  *
- * Un-paginated in 4D.1 (see [ListEncounterNotesResult] KDoc).
- * Adding pagination later is additive.
+ * Wire shape (per ADR-009 §2.4):
+ *
+ * ```json
+ * {
+ *   "data": {
+ *     "items": [ ... ],
+ *     "pageInfo": {
+ *       "hasNextPage": true,
+ *       "nextCursor": "eyJrIjoiY2xpbmljYWwuZW5jb3VudGVyX25vdGUudjEi..."
+ *     }
+ *   },
+ *   "requestId": "..."
+ * }
+ * ```
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class EncounterNoteListResponse(
     val items: List<EncounterNoteResponse>,
+    val pageInfo: PageInfoDto,
 ) {
     companion object {
         fun from(result: ListEncounterNotesResult): EncounterNoteListResponse =
             EncounterNoteListResponse(
                 items = result.items.map { EncounterNoteResponse.from(it) },
+                pageInfo = PageInfoDto.from(result.pageInfo),
             )
+    }
+}
+
+/**
+ * Wire shape of the `pageInfo` field (ADR-009 §2.4). Mirrors
+ * the substrate's [com.medcore.platform.read.pagination.PageInfo]
+ * — carried as its own DTO so future per-resource extensions
+ * (e.g., a `totalCount` opt-in for non-clinical surfaces)
+ * don't ripple back into the platform substrate.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class PageInfoDto(
+    val hasNextPage: Boolean,
+    val nextCursor: String?,
+) {
+    companion object {
+        fun from(pi: com.medcore.platform.read.pagination.PageInfo): PageInfoDto =
+            PageInfoDto(hasNextPage = pi.hasNextPage, nextCursor = pi.nextCursor)
     }
 }
