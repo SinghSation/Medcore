@@ -7,6 +7,7 @@ import {
 } from '@/lib/notes'
 import { ApiError } from '@/lib/api-client'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('encounter notes API client', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -50,7 +51,7 @@ describe('encounter notes API client', () => {
   it('listEncounterNotes GETs the list with bearer + tenant headers', async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse(200, {
-        data: { items: [noteOf('n-1'), noteOf('n-2')] },
+        data: pagedDataMock([noteOf('n-1'), noteOf('n-2')]),
         requestId: 'r',
       }),
     )

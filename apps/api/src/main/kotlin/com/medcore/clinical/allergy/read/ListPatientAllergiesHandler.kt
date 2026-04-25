@@ -1,15 +1,25 @@
 package com.medcore.clinical.allergy.read
 
+import com.medcore.clinical.allergy.persistence.AllergyEntity
 import com.medcore.clinical.allergy.persistence.AllergyRepository
 import com.medcore.clinical.allergy.write.AllergySnapshot
 import com.medcore.clinical.patient.persistence.PatientRepository
+import com.medcore.platform.read.pagination.BucketedCursor
+import com.medcore.platform.read.pagination.CursorCodec
+import com.medcore.platform.read.pagination.PageResponse
 import com.medcore.platform.write.WriteContext
 import com.medcore.tenancy.persistence.TenantRepository
 import jakarta.persistence.EntityNotFoundException
+import org.springframework.data.domain.Limit
 import org.springframework.stereotype.Component
 
 /**
- * Handler for [ListPatientAllergiesCommand] (Phase 4E.1).
+ * Handler for [ListPatientAllergiesCommand] (Phase 4E.1,
+ * paginated as of platform-pagination chunk D, ADR-009).
+ *
+ * **First [BucketedCursor] adopter.** The cursor encodes the
+ * full sort tuple `(status_priority, createdAt, id)` so cross-
+ * bucket walks resume at the correct bucket boundary.
  *
  * Runs inside [com.medcore.platform.read.ReadGate]'s
  * transaction with both RLS GUCs set by `PhiRlsTxHook`.
@@ -18,23 +28,25 @@ import org.springframework.stereotype.Component
  *
  * 1. Resolve tenant by slug.
  * 2. Load patient; verify `patient.tenantId == tenant.id`
- *    (cross-tenant probe → 404 — no existence leak; mirrors
- *    `ListPatientEncountersHandler`).
- * 3. Fetch all allergies for `(tenant_id, patient_id)` via
- *    [AllergyRepository.findByTenantIdAndPatientIdOrdered].
- *    The query runs under V24's SELECT RLS policy — RLS-
- *    invisible rows (cross-tenant, etc.) are filtered at the
- *    DB layer. A zero-row result means "no allergies recorded
- *    for this patient" — STILL a disclosure event, audited
- *    once with `count:0`.
- * 4. Map entities to [AllergySnapshot]s.
+ *    (cross-tenant probe → 404, no leak).
+ * 3. Decode optional cursor:
+ *    - `null` → first page (ACTIVE rows surface here per
+ *      ADR-009 §2.5 ACTIVE-first guarantee).
+ *    - non-null → [BucketedCursor.fromMap] with key
+ *      `"clinical.allergy.v1"`. Malformed → 422.
+ * 4. Fetch `pageSize + 1` rows; first page or cursor walk.
+ * 5. Hand to [PageResponse.fromFetchedPlusOne]; cursor builder
+ *    encodes the LAST trimmed row's `(status.priority, createdAt, id)`.
  *
- * ### Banner vs management filtering
+ * ### Cursor walk vs first page
  *
- * The handler does NOT filter by status. Returning all rows
- * lets the audit count match what RLS allowed the caller to
- * see (compliance accuracy), and the frontend filters to
- * ACTIVE for the banner / shows all for the management view.
+ * The first-page query uses an `ORDER BY` only — no `WHERE` on
+ * the cursor tuple. The cursor walk adds a 3-clause OR:
+ *   `bucket > b_last`              (next bucket)
+ *   `bucket = b_last AND ts < ts_last`     (same bucket, older)
+ *   `bucket = b_last AND ts = ts_last AND id < id_last`  (tiebreak)
+ *
+ * The repository encapsulates both queries.
  */
 @Component
 class ListPatientAllergiesHandler(
@@ -56,12 +68,40 @@ class ListPatientAllergiesHandler(
             throw EntityNotFoundException("patient not found: ${command.patientId}")
         }
 
-        val allergies = allergyRepository.findByTenantIdAndPatientIdOrdered(
-            tenantId = tenant.id,
-            patientId = patient.id,
-        )
-        return ListPatientAllergiesResult(
-            items = allergies.map { AllergySnapshot.from(it) },
-        )
+        val pageSize = command.pageRequest.pageSize
+        val limit = Limit.of(pageSize + 1)
+
+        val rawCursor = command.pageRequest.cursor
+        val rows: List<AllergyEntity> = if (rawCursor == null) {
+            allergyRepository.findFirstPage(tenant.id, patient.id, limit)
+        } else {
+            val map = CursorCodec.decodeMap(rawCursor)
+            val cursor = BucketedCursor.fromMap(map, expectedKey = CURSOR_K)
+            allergyRepository.findAfter(
+                tenantId = tenant.id,
+                patientId = patient.id,
+                bucket = cursor.bucket,
+                ts = cursor.ts,
+                id = cursor.id,
+                limit = limit,
+            )
+        }
+
+        return PageResponse.fromFetchedPlusOne(
+            fetchedPlusOne = rows.map { AllergySnapshot.from(it) },
+            pageSize = pageSize,
+        ) { last ->
+            BucketedCursor(
+                k = CURSOR_K,
+                bucket = last.status.priority,
+                ts = last.createdAt,
+                id = last.id,
+            )
+        }
+    }
+
+    private companion object {
+        /** Cursor schema discriminator; bump to `.v2` if sort axis or fields change. */
+        const val CURSOR_K: String = "clinical.allergy.v1"
     }
 }

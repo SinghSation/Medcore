@@ -117,4 +117,23 @@ class ProblemEntity(
     @Version
     @Column(name = "row_version", nullable = false)
     var rowVersion: Long = 0,
-)
+) {
+    /**
+     * Mirror of the `status_priority` GENERATED ALWAYS AS STORED
+     * column added in V29. Maintained entirely by PG from `status`
+     * (see migration KDoc for the CASE mapping — RESOLVED ≠
+     * INACTIVE is encoded here as 2 ≠ 1). Marked
+     * `insertable = false, updatable = false` so JPA never tries
+     * to write it; Hibernate hydrates it on every read.
+     *
+     * Application code never reads or writes this directly. It
+     * exists on the entity solely so [ProblemRepository]'s JPQL
+     * cursor-walk queries can `ORDER BY p.statusPriority` and
+     * have PG resolve the sort directly from the V29 covering
+     * index — see ADR-009 §2.5 + the V29 KDoc for the
+     * raw-status-index-mismatch finding that motivated this.
+     */
+    @Column(name = "status_priority", insertable = false, updatable = false)
+    var statusPriority: Short = 0
+        protected set
+}

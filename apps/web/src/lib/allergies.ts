@@ -43,6 +43,7 @@ export interface Allergy {
 
 export interface AllergyList {
   items: Allergy[]
+  pageInfo: import('./pagination').PageInfo
 }
 
 export interface ListPatientAllergiesParams {

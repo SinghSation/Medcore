@@ -234,20 +234,23 @@ data class AllergyResponse(
 }
 
 /**
- * Wire envelope for the list endpoint (Phase 4E.1).
+ * Wire envelope for the list endpoint (Phase 4E.1, paginated
+ * as of platform-pagination chunk D, ADR-009).
  *
- * Un-paginated, mirrors `EncounterListResponse` /
- * `EncounterNoteListResponse`. Adding pagination is additive
- * in a later slice.
+ * Carries `pageInfo` per ADR-009 §2.4 — same shape as the
+ * other paginated clinical list responses (encounter-notes,
+ * encounters, problems).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class AllergyListResponse(
     val items: List<AllergyResponse>,
+    val pageInfo: com.medcore.platform.api.PageInfoDto,
 ) {
     companion object {
         fun from(result: ListPatientAllergiesResult): AllergyListResponse =
             AllergyListResponse(
                 items = result.items.map { AllergyResponse.from(it) },
+                pageInfo = com.medcore.platform.api.PageInfoDto.from(result.pageInfo),
             )
     }
 }

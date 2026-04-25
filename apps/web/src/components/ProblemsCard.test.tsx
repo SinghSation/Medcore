@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProblemsCard } from '@/components/ProblemsCard'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('<ProblemsCard />', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -127,8 +128,8 @@ describe('<ProblemsCard />', () => {
       if (url.endsWith('/problems')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: addedYet
+            data: pagedDataMock(
+              addedYet
                 ? [
                     problemOf('p-new', {
                       status: 'ACTIVE',
@@ -136,7 +137,7 @@ describe('<ProblemsCard />', () => {
                     }),
                   ]
                 : [],
-            },
+            ),
             requestId: 'r',
           }),
         )
@@ -194,15 +195,13 @@ describe('<ProblemsCard />', () => {
       if (url.endsWith('/problems')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: [
-                problemOf('p-1', {
-                  status: 'ACTIVE',
-                  conditionText: 'Asthma',
-                  rowVersion: 0,
-                }),
-              ],
-            },
+            data: pagedDataMock([
+              problemOf('p-1', {
+                status: 'ACTIVE',
+                conditionText: 'Asthma',
+                rowVersion: 0,
+              }),
+            ]),
             requestId: 'r',
           }),
         )
@@ -239,15 +238,13 @@ describe('<ProblemsCard />', () => {
     // or revoke as ENTERED_IN_ERROR — both visible.
     fetchSpy.mockResolvedValue(
       jsonResponse(200, {
-        data: {
-          items: [
-            problemOf('p-resolved', {
-              status: 'RESOLVED',
-              conditionText: 'Bronchitis',
-              rowVersion: 0,
-            }),
-          ],
-        },
+        data: pagedDataMock([
+          problemOf('p-resolved', {
+            status: 'RESOLVED',
+            conditionText: 'Bronchitis',
+            rowVersion: 0,
+          }),
+        ]),
         requestId: 'r',
       }),
     )
@@ -307,15 +304,13 @@ describe('<ProblemsCard />', () => {
       if (url.endsWith('/problems')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: {
-              items: [
-                problemOf('p-1', {
-                  status: 'ACTIVE',
-                  conditionText: 'Asthma',
-                  rowVersion: 0,
-                }),
-              ],
-            },
+            data: pagedDataMock([
+              problemOf('p-1', {
+                status: 'ACTIVE',
+                conditionText: 'Asthma',
+                rowVersion: 0,
+              }),
+            ]),
             requestId: 'r',
           }),
         )
@@ -359,7 +354,7 @@ describe('<ProblemsCard />', () => {
     fetchSpy.mockImplementation(() =>
       Promise.resolve(
         jsonResponse(200, {
-          data: { items: opts.items },
+          data: pagedDataMock(opts.items),
           requestId: 'r',
         }),
       ),

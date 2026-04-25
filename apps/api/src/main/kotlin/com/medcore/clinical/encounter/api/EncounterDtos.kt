@@ -2,6 +2,7 @@ package com.medcore.clinical.encounter.api
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.medcore.clinical.encounter.model.CancelReason
+import com.medcore.platform.api.PageInfoDto
 import com.medcore.clinical.encounter.model.EncounterClass
 import com.medcore.clinical.encounter.model.EncounterNoteStatus
 import com.medcore.clinical.encounter.model.EncounterStatus
@@ -166,11 +167,13 @@ data class CancelEncounterRequest(
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class EncounterListResponse(
     val items: List<EncounterResponse>,
+    val pageInfo: PageInfoDto,
 ) {
     companion object {
         fun from(result: ListPatientEncountersResult): EncounterListResponse =
             EncounterListResponse(
                 items = result.items.map { EncounterResponse.from(it) },
+                pageInfo = PageInfoDto.from(result.pageInfo),
             )
     }
 }
@@ -295,19 +298,36 @@ data class EncounterNoteResponse(
 /**
  * Wire envelope for
  * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
- * (Phase 4D.1).
+ * (Phase 4D.1; paginated as of platform-pagination chunk B).
  *
- * Un-paginated in 4D.1 (see [ListEncounterNotesResult] KDoc).
- * Adding pagination later is additive.
+ * Wire shape (per ADR-009 §2.4):
+ *
+ * ```json
+ * {
+ *   "data": {
+ *     "items": [ ... ],
+ *     "pageInfo": {
+ *       "hasNextPage": true,
+ *       "nextCursor": "eyJrIjoiY2xpbmljYWwuZW5jb3VudGVyX25vdGUudjEi..."
+ *     }
+ *   },
+ *   "requestId": "..."
+ * }
+ * ```
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class EncounterNoteListResponse(
     val items: List<EncounterNoteResponse>,
+    val pageInfo: PageInfoDto,
 ) {
     companion object {
         fun from(result: ListEncounterNotesResult): EncounterNoteListResponse =
             EncounterNoteListResponse(
                 items = result.items.map { EncounterNoteResponse.from(it) },
+                pageInfo = PageInfoDto.from(result.pageInfo),
             )
     }
 }
+
+// PageInfoDto promoted to com.medcore.platform.api in chunk D
+// — see import at the top of this file.

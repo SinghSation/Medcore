@@ -34,4 +34,28 @@ enum class AllergyStatus {
     ACTIVE,
     INACTIVE,
     ENTERED_IN_ERROR,
+    ;
+
+    /**
+     * Status-priority for ADR-009 cursor pagination.
+     *
+     * Normative mapping (ADR-009 §2.5):
+     *   ACTIVE = 0, INACTIVE = 1, RESOLVED = 2 (problems-only),
+     *   ENTERED_IN_ERROR = 3.
+     *
+     * Allergies skip the `2` slot — the integer is uniform across
+     * the platform so a `BucketedCursor.bucket` value has a
+     * stable interpretation regardless of resource. The cursor's
+     * `k` discriminator distinguishes allergy vs problem rows.
+     *
+     * The same mapping is encoded in
+     * [com.medcore.clinical.allergy.persistence.AllergyRepository]'s
+     * inline CASE expressions (JPQL) — keep them in sync.
+     */
+    val priority: Int
+        get() = when (this) {
+            ACTIVE -> 0
+            INACTIVE -> 1
+            ENTERED_IN_ERROR -> 3
+        }
 }

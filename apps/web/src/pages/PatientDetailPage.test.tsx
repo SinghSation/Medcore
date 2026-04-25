@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '@/providers/AuthProvider'
 import { PatientDetailPage } from '@/pages/PatientDetailPage'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('<PatientDetailPage />', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -282,7 +283,7 @@ describe('<PatientDetailPage />', () => {
       }
       if (url.endsWith('/encounters')) {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock([]), requestId: 'r' }),
         )
       }
       return Promise.resolve(
@@ -323,7 +324,7 @@ describe('<PatientDetailPage />', () => {
       }
       if (url.endsWith('/encounters')) {
         return Promise.resolve(
-          jsonResponse(200, { data: { items: [] }, requestId: 'r' }),
+          jsonResponse(200, { data: pagedDataMock([]), requestId: 'r' }),
         )
       }
       return Promise.resolve(
@@ -390,7 +391,7 @@ describe('<PatientDetailPage />', () => {
       if (url.endsWith('/encounters')) {
         return Promise.resolve(
           jsonResponse(200, {
-            data: { items: opts.encounters },
+            data: pagedDataMock(opts.encounters),
             requestId: 'r',
           }),
         )

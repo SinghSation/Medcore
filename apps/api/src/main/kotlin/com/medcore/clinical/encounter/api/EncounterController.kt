@@ -25,6 +25,7 @@ import com.medcore.clinical.encounter.write.StartEncounterHandler
 import com.medcore.platform.api.ApiResponse
 import com.medcore.platform.observability.MdcKeys
 import com.medcore.platform.read.ReadGate
+import com.medcore.platform.read.pagination.PageRequest
 import com.medcore.platform.security.MedcorePrincipal
 import com.medcore.platform.write.WriteContext
 import com.medcore.platform.write.WriteGate
@@ -40,6 +41,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 /**
@@ -187,8 +189,15 @@ class EncounterController(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
         @PathVariable patientId: UUID,
+        @RequestParam(name = "pageSize", required = false) pageSize: Int?,
+        @RequestParam(name = "cursor", required = false) cursor: String?,
     ): ResponseEntity<ApiResponse<EncounterListResponse>> {
-        val command = ListPatientEncountersCommand(slug = slug, patientId = patientId)
+        val pageRequest = PageRequest.fromQueryParams(pageSize = pageSize, cursor = cursor)
+        val command = ListPatientEncountersCommand(
+            slug = slug,
+            patientId = patientId,
+            pageRequest = pageRequest,
+        )
         val context = WriteContext(principal = principal, idempotencyKey = null)
         val result = listPatientEncountersGate.apply(command, context) { cmd ->
             listPatientEncountersHandler.handle(cmd, context)
@@ -237,10 +246,16 @@ class EncounterController(
     }
 
     /**
-     * List all notes for an encounter, newest first (Phase 4D.1).
-     * Emits `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED` on 200,
-     * including for empty lists. Requires `NOTE_READ` (all
-     * three roles).
+     * List notes for an encounter, newest first (Phase 4D.1;
+     * paginated as of platform-pagination chunk B, ADR-009).
+     *
+     * Optional query params:
+     *   - `pageSize` — default 50, range [1..100]; out-of-range → 422.
+     *   - `cursor`   — opaque token from a prior `pageInfo.nextCursor`.
+     *
+     * Emits `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED` on 200 — one
+     * audit row per fetched page (each page is a distinct
+     * disclosure event). Requires `NOTE_READ` (all three roles).
      */
     @GetMapping(
         "/api/v1/tenants/{slug}/encounters/{encounterId}/notes",
@@ -250,8 +265,15 @@ class EncounterController(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
         @PathVariable encounterId: UUID,
+        @RequestParam(name = "pageSize", required = false) pageSize: Int?,
+        @RequestParam(name = "cursor", required = false) cursor: String?,
     ): ResponseEntity<ApiResponse<EncounterNoteListResponse>> {
-        val command = ListEncounterNotesCommand(slug = slug, encounterId = encounterId)
+        val pageRequest = PageRequest.fromQueryParams(pageSize = pageSize, cursor = cursor)
+        val command = ListEncounterNotesCommand(
+            slug = slug,
+            encounterId = encounterId,
+            pageRequest = pageRequest,
+        )
         val context = WriteContext(principal = principal, idempotencyKey = null)
         val result = listEncounterNotesGate.apply(command, context) { cmd ->
             listEncounterNotesHandler.handle(cmd, context)

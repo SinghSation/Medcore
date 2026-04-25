@@ -1,18 +1,19 @@
 package com.medcore.clinical.encounter.read
 
 import com.medcore.clinical.encounter.write.EncounterNoteSnapshot
+import com.medcore.platform.read.pagination.PageResponse
 
 /**
  * Handler result for [ListEncounterNotesCommand]
- * (Phase 4D.1, VS1 Chunk E).
+ * (Phase 4D.1, paginated as of platform-pagination chunk B).
  *
- * Unlike `ListPatientsResult` (4B.1), this list has no
- * `totalCount` / `limit` / `offset` / `hasMore` because the
- * 4D.1 surface ships un-paginated (per scope decision). Adding
- * pagination is additive in a later slice — the response
- * envelope will expand; existing clients ignoring new fields
- * continue to work.
+ * Wire envelope: `{ items, pageInfo }` per ADR-009 §2.4. No
+ * `totalCount` (FHIR Bundle posture; computing total per page
+ * is a redundant `COUNT(*)`).
+ *
+ * Defining this as a typealias to `PageResponse<T>` (rather
+ * than re-declaring its fields) keeps the substrate the single
+ * source of truth; future evolution of `PageResponse<T>` (e.g.,
+ * additive metadata) propagates automatically.
  */
-data class ListEncounterNotesResult(
-    val items: List<EncounterNoteSnapshot>,
-)
+typealias ListEncounterNotesResult = PageResponse<EncounterNoteSnapshot>

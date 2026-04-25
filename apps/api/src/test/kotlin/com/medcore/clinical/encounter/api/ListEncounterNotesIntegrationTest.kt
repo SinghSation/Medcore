@@ -26,17 +26,26 @@ import org.springframework.jdbc.core.JdbcTemplate
 /**
  * End-to-end coverage for
  * `GET /api/v1/tenants/{slug}/encounters/{encounterId}/notes`
- * (Phase 4D.1, VS1 Chunk E).
+ * (Phase 4D.1, VS1 Chunk E; paginated as of platform-pagination
+ * chunk B, ADR-009).
  *
  * Proves:
- *   1. Happy path: 200 + items array (newest first) + ONE
- *      `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED` audit row with
- *      reason `"intent:clinical.encounter.note.list|count:N"`.
- *   2. Empty list: 200 with items=[] + ONE audit row (count:0).
+ *   1. Happy path: 200 + paginated envelope `{items, pageInfo}`
+ *      (newest first) + ONE `CLINICAL_ENCOUNTER_NOTE_LIST_ACCESSED`
+ *      audit row with reason
+ *      `intent:clinical.encounter.note.list|count:N|page_size:P|has_next:bool`.
+ *   2. Empty list: 200 with items=[] + ONE audit row (count:0,
+ *      has_next:false).
  *   3. All three roles can read.
  *   4. 404 on unknown / cross-tenant encounter.
- *   5. Filter-level denial (no membership) — 403 + no list
- *      audit row.
+ *   5. Filter-level denial (no membership) — 403 + no list audit row.
+ *   6. **NEW (chunk B)** — pageSize=2 returns 2 items + hasNextPage:true
+ *      + nextCursor; following the cursor returns the remaining items
+ *      with hasNextPage:false. Two audit rows total (one per page).
+ *   7. **NEW (chunk B)** — pageSize=0 returns 422 with
+ *      validationErrors[{field=pageSize, code=out_of_range}].
+ *   8. **NEW (chunk B)** — malformed cursor returns 422 with
+ *      validationErrors[{field=cursor, code=malformed}].
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Import(TestcontainersConfiguration::class)
@@ -84,9 +93,17 @@ class ListEncounterNotesIntegrationTest {
         val items = data["items"] as List<*>
         assertThat(items).hasSize(3)
 
+        // ADR-009 §2.4: every paginated response includes pageInfo.
+        val pageInfo = data["pageInfo"] as Map<*, *>
+        assertThat(pageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(pageInfo["nextCursor"]).isNull()
+
         val row = auditRows("clinical.encounter.note.list_accessed").single()
+        // ADR-009 §2.7: per-page count + page_size + has_next.
         assertThat(row["reason"])
-            .isEqualTo("intent:clinical.encounter.note.list|count:3")
+            .isEqualTo(
+                "intent:clinical.encounter.note.list|count:3|page_size:50|has_next:false",
+            )
         assertThat(row["resource_type"]).isEqualTo("clinical.encounter.note")
         assertThat(row["resource_id"]).isNull()
         assertThat(row["outcome"]).isEqualTo("SUCCESS")
@@ -99,12 +116,117 @@ class ListEncounterNotesIntegrationTest {
 
         val resp = get("alice", "acme-health", encounterId)
         assertThat(resp.statusCode).isEqualTo(HttpStatus.OK)
-        val items = ((resp.body!!["data"] as Map<*, *>)["items"]) as List<*>
+        val data = resp.body!!["data"] as Map<*, *>
+        val items = data["items"] as List<*>
         assertThat(items).isEmpty()
+        val pageInfo = data["pageInfo"] as Map<*, *>
+        assertThat(pageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(pageInfo["nextCursor"]).isNull()
 
         val row = auditRows("clinical.encounter.note.list_accessed").single()
         assertThat(row["reason"])
-            .isEqualTo("intent:clinical.encounter.note.list|count:0")
+            .isEqualTo(
+                "intent:clinical.encounter.note.list|count:0|page_size:50|has_next:false",
+            )
+    }
+
+    // ========================================================================
+    // Pagination (chunk B — ADR-009)
+    // ========================================================================
+
+    @Test
+    fun `pageSize=2 returns 2 items with hasNextPage and a usable cursor`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+        // Insert 3 notes; each gets a distinct created_at via the
+        // sleep so the (createdAt DESC, id DESC) ordering is
+        // deterministic across the cursor walk.
+        createNote("alice", "acme-health", encounterId, "first")
+        Thread.sleep(5)
+        createNote("alice", "acme-health", encounterId, "second")
+        Thread.sleep(5)
+        createNote("alice", "acme-health", encounterId, "third")
+        jdbc.update("DELETE FROM audit.audit_event")
+
+        // First page (newest 2: "third" + "second").
+        val firstResp = get("alice", "acme-health", encounterId, pageSize = 2)
+        assertThat(firstResp.statusCode).isEqualTo(HttpStatus.OK)
+        val firstData = firstResp.body!!["data"] as Map<*, *>
+        val firstItems = firstData["items"] as List<*>
+        assertThat(firstItems).hasSize(2)
+        val firstPageInfo = firstData["pageInfo"] as Map<*, *>
+        assertThat(firstPageInfo["hasNextPage"]).isEqualTo(true)
+        val nextCursor = firstPageInfo["nextCursor"] as String
+        assertThat(nextCursor).isNotBlank
+        // Cursor must be opaque — never carry plaintext PHI / id.
+        assertThat(nextCursor).doesNotContain("clinical")
+
+        // Second page (oldest: "first").
+        val secondResp = get(
+            "alice", "acme-health", encounterId,
+            pageSize = 2, cursor = nextCursor,
+        )
+        assertThat(secondResp.statusCode).isEqualTo(HttpStatus.OK)
+        val secondData = secondResp.body!!["data"] as Map<*, *>
+        val secondItems = secondData["items"] as List<*>
+        assertThat(secondItems).hasSize(1)
+        val secondPageInfo = secondData["pageInfo"] as Map<*, *>
+        assertThat(secondPageInfo["hasNextPage"]).isEqualTo(false)
+        assertThat(secondPageInfo["nextCursor"]).isNull()
+
+        // Two list-access audit rows — one per page-fetch (each
+        // is a distinct disclosure event per ADR-009 §2.7).
+        val rows = auditRows("clinical.encounter.note.list_accessed")
+        assertThat(rows).hasSize(2)
+        assertThat(rows[0]["reason"])
+            .isEqualTo(
+                "intent:clinical.encounter.note.list|count:2|page_size:2|has_next:true",
+            )
+        assertThat(rows[1]["reason"])
+            .isEqualTo(
+                "intent:clinical.encounter.note.list|count:1|page_size:2|has_next:false",
+            )
+    }
+
+    @Test
+    fun `pageSize=0 returns 422 with out_of_range`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+
+        @Suppress("UNCHECKED_CAST")
+        val resp = rest.exchange(
+            "/api/v1/tenants/acme-health/encounters/$encounterId/notes?pageSize=0",
+            HttpMethod.GET,
+            HttpEntity<Void>(authJsonHeaders(tokenFor("alice")).apply {
+                add("X-Medcore-Tenant", "acme-health")
+            }),
+            Map::class.java,
+        ) as ResponseEntity<Map<String, Any>>
+
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("pageSize")
+            assertThat(err["code"]).isEqualTo("out_of_range")
+        }
+    }
+
+    @Test
+    fun `malformed cursor returns 422 with cursor field error`() {
+        val (_, encounterId) = seedEncounter("alice", role = "OWNER")
+
+        val resp = get(
+            "alice", "acme-health", encounterId,
+            pageSize = 50, cursor = "!!not-a-valid-cursor!!",
+        )
+        assertThat(resp.statusCode).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY)
+        @Suppress("UNCHECKED_CAST")
+        val errors = ((resp.body!!["details"] as Map<String, Any>)["validationErrors"])
+            as List<Map<String, Any>>
+        assertThat(errors).anySatisfy { err ->
+            assertThat(err["field"]).isEqualTo("cursor")
+            assertThat(err["code"]).isEqualTo("malformed")
+        }
     }
 
     @Test
@@ -230,12 +352,18 @@ class ListEncounterNotesIntegrationTest {
         subject: String,
         slug: String,
         encounterId: UUID,
+        pageSize: Int? = null,
+        cursor: String? = null,
     ): ResponseEntity<Map<String, Any>> {
         val headers = authJsonHeaders(tokenFor(subject)).apply {
             add("X-Medcore-Tenant", slug)
         }
+        val query = buildList {
+            if (pageSize != null) add("pageSize=$pageSize")
+            if (cursor != null) add("cursor=${java.net.URLEncoder.encode(cursor, "UTF-8")}")
+        }.joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
         return rest.exchange(
-            "/api/v1/tenants/$slug/encounters/$encounterId/notes",
+            "/api/v1/tenants/$slug/encounters/$encounterId/notes$query",
             HttpMethod.GET,
             HttpEntity<Void>(headers),
             Map::class.java,

@@ -7,6 +7,7 @@ import {
 } from '@/lib/allergies'
 import { ApiError } from '@/lib/api-client'
 import { clearToken, setToken } from '@/lib/auth'
+import { pagedDataMock } from '@/lib/pagination.test-utils'
 
 describe('allergies API client', () => {
   const fetchSpy = vi.fn<typeof fetch>()
@@ -26,7 +27,7 @@ describe('allergies API client', () => {
   it('listPatientAllergies GETs the list with bearer + tenant headers', async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse(200, {
-        data: { items: [allergyOf('a-1')] },
+        data: pagedDataMock([allergyOf('a-1')]),
         requestId: 'r',
       }),
     )

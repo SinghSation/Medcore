@@ -1,28 +1,31 @@
 package com.medcore.clinical.problem.read
 
+import com.medcore.platform.read.pagination.PageRequest
 import java.util.UUID
 
 /**
  * Command for
  * `GET /api/v1/tenants/{slug}/patients/{patientId}/problems`
- * (Phase 4E.2).
+ * (Phase 4E.2, paginated as of platform-pagination chunk E,
+ * ADR-009).
  *
- * Lists every problem on a patient — ACTIVE first, then
- * INACTIVE, then RESOLVED, then ENTERED_IN_ERROR (per
- * [com.medcore.clinical.problem.persistence.ProblemRepository.findByTenantIdAndPatientIdOrdered]).
+ * Lists problems with status priority: ACTIVE first, then
+ * INACTIVE, then RESOLVED, then ENTERED_IN_ERROR. Within each
+ * bucket, newest-first by `createdAt DESC, id DESC`.
  *
- * The frontend "Problems" card filters or sorts as the UX
- * dictates; the management surface inside the modal can show
- * everything including ENTERED_IN_ERROR for data-audit
- * purposes. The handler returns the full set so the audit
- * row's `count` matches what RLS allowed the caller to see.
+ * **RESOLVED ≠ INACTIVE** — load-bearing 4E.2 invariant
+ * preserved by the cursor encoding `(status_priority,
+ * createdAt, id)` per ADR-009 §2.5.
  *
- * Un-paginated in 4E.2 — bounded in practice. A single
- * patient's problem list stays small (typical 5–20). Cursor-
- * based pagination is a later slice if a research / import
- * workflow accumulates hundreds.
+ * Cursor implementation:
+ * [com.medcore.platform.read.pagination.BucketedCursor] with
+ * `k = "clinical.problem.v1"`, `bucket` = priority (0/1/2/3),
+ * `ts` = createdAt, `id` = entity id.
+ *
+ * Wire shape: `?pageSize=50&cursor=<opaque>`.
  */
 data class ListPatientProblemsCommand(
     val slug: String,
     val patientId: UUID,
+    val pageRequest: PageRequest,
 )

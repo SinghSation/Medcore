@@ -20,27 +20,54 @@ import org.springframework.data.jpa.repository.Query
  */
 interface EncounterRepository : JpaRepository<EncounterEntity, UUID> {
     /**
-     * Per-patient encounter list, newest-first by `started_at`.
-     * Runs under V18's SELECT RLS policy + the `tenant_id +
-     * patient_id` composite predicate — rows the caller should
-     * not see are filtered at the DB layer, a zero-row result
-     * means "no encounters yet for this patient" (a legitimate
-     * disclosure event still audited once via the list auditor).
+     * Per-patient encounter list, newest-first by `created_at`,
+     * tied on `id DESC` (paginated as of platform-pagination
+     * chunk C, ADR-009 §2.5).
      *
-     * Un-paginated in 4C.3 — bounded in practice. Cursor-based
-     * pagination is a later slice if tenant scale warrants.
+     * Runs under V18's SELECT RLS policy + V27's covering
+     * index `(tenant_id, patient_id, created_at, id)`.
+     *
+     * Sort axis is `createdAt`, not `startedAt`, because
+     * cursor pagination needs a non-null primary axis and
+     * `startedAt` is nullable on the entity. For the current
+     * IN_PROGRESS-on-create flow, `startedAt == createdAt` —
+     * observably identical ordering. Documented in
+     * V27__encounter_pagination_index.sql.
      */
     @Query(
         """
         SELECT e FROM EncounterEntity e
          WHERE e.tenantId = :tenantId
            AND e.patientId = :patientId
-         ORDER BY e.startedAt DESC, e.createdAt DESC
+         ORDER BY e.createdAt DESC, e.id DESC
         """,
     )
-    fun findByTenantIdAndPatientIdOrdered(
+    fun findFirstPage(
         tenantId: UUID,
         patientId: UUID,
+        limit: org.springframework.data.domain.Limit,
+    ): List<EncounterEntity>
+
+    /**
+     * Cursor walk: rows strictly AFTER the given `(createdAt, id)`
+     * tuple in the `(createdAt DESC, id DESC)` ordering.
+     */
+    @Query(
+        """
+        SELECT e FROM EncounterEntity e
+         WHERE e.tenantId = :tenantId
+           AND e.patientId = :patientId
+           AND ( e.createdAt < :ts
+                 OR ( e.createdAt = :ts AND e.id < :id ) )
+         ORDER BY e.createdAt DESC, e.id DESC
+        """,
+    )
+    fun findAfter(
+        tenantId: UUID,
+        patientId: UUID,
+        ts: java.time.Instant,
+        id: UUID,
+        limit: org.springframework.data.domain.Limit,
     ): List<EncounterEntity>
 
     /**

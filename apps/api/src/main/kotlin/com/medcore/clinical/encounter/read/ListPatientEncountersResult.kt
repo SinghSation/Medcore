@@ -1,16 +1,15 @@
 package com.medcore.clinical.encounter.read
 
 import com.medcore.clinical.encounter.write.EncounterSnapshot
+import com.medcore.platform.read.pagination.PageResponse
 
 /**
- * Handler result for [ListPatientEncountersCommand] (Phase 4C.3).
+ * Handler result for [ListPatientEncountersCommand]
+ * (Phase 4C.3, paginated as of platform-pagination chunk C).
  *
- * Un-paginated list — no `totalCount` / `limit` / `offset`
- * envelope fields, consistent with
- * [ListEncounterNotesResult]. Adding pagination is additive in a
- * later slice; existing clients ignoring new fields continue to
- * work.
+ * Wire envelope: `{ items, pageInfo }` per ADR-009 §2.4. The
+ * `typealias` keeps the substrate as the single source of
+ * truth for the envelope shape — same posture as
+ * [ListEncounterNotesResult].
  */
-data class ListPatientEncountersResult(
-    val items: List<EncounterSnapshot>,
-)
+typealias ListPatientEncountersResult = PageResponse<EncounterSnapshot>

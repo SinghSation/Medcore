@@ -200,8 +200,15 @@ class AllergyController(
         @AuthenticationPrincipal principal: MedcorePrincipal,
         @PathVariable slug: String,
         @PathVariable patientId: UUID,
+        @org.springframework.web.bind.annotation.RequestParam(name = "pageSize", required = false) pageSize: Int?,
+        @org.springframework.web.bind.annotation.RequestParam(name = "cursor", required = false) cursor: String?,
     ): ResponseEntity<ApiResponse<AllergyListResponse>> {
-        val command = ListPatientAllergiesCommand(slug = slug, patientId = patientId)
+        val pageRequest = com.medcore.platform.read.pagination.PageRequest.fromQueryParams(
+            pageSize = pageSize, cursor = cursor,
+        )
+        val command = ListPatientAllergiesCommand(
+            slug = slug, patientId = patientId, pageRequest = pageRequest,
+        )
         val context = WriteContext(principal = principal, idempotencyKey = null)
         val result = listPatientAllergiesGate.apply(command, context) { cmd ->
             listPatientAllergiesHandler.handle(cmd, context)
