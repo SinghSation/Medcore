@@ -144,6 +144,21 @@ playwright-report/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 
+# --- Terraform ---------------------------------------------------------------
+# Local state and lock files (the bootstrap module uses local state by
+# design; everything else uses the S3 backend, so these live only in
+# `infra/bootstrap/`). Plan output and CLI configs are also local.
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.tfvars
+!**/*.tfvars.example
+**/.terraform.lock.hcl.backup
+**/crash.log
+**/crash.*.log
+**/bootstrap-outputs.json
+
 # --- Misc --------------------------------------------------------------------
 tmp/
 temp/
