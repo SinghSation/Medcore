@@ -17,6 +17,13 @@
 provider "aws" {
   region = var.aws_region
 
+  # Belt-and-suspenders for ADR-010 §2.5 ("operator must verify the right
+  # account"). When `allowed_account_ids` is non-empty, Terraform fails
+  # at plan time if the resolved AWS credentials don't match. Empty list
+  # disables the check (default — first apply has no account ID known
+  # in advance; operator sets after the first run).
+  allowed_account_ids = var.allowed_account_ids
+
   default_tags {
     tags = var.tags
   }
@@ -91,6 +98,15 @@ resource "aws_s3_bucket_public_access_block" "state" {
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 
+  # `noncurrent_version_expiration` only applies to versioned buckets,
+  # and the AWS provider v5 does NOT infer a dependency between this
+  # resource and `aws_s3_bucket_versioning` even though both reference
+  # `aws_s3_bucket.state.id`. Without this explicit `depends_on`, a
+  # first-time apply may install the lifecycle rule before versioning
+  # is enabled, producing `InvalidBucketState` or silently inert
+  # configuration. Terraform-registry docs recommend this pattern.
+  depends_on = [aws_s3_bucket_versioning.state]
+
   # Rule: expire non-current versions after N days. Current versions are
   # kept indefinitely (state history); the rule trims old revisions to
   # bound storage cost. ADR-010 §2.3 documents the 90-day default.
@@ -144,4 +160,12 @@ resource "aws_dynamodb_table" "lock" {
   server_side_encryption {
     enabled = true
   }
+
+  # Mirror of the S3 bucket's `force_destroy = false` guard. A
+  # `terraform destroy` on this module fails fast unless an operator
+  # explicitly flips this to `false` first (and re-applies). Prevents
+  # an accidental destroy from nuking the lock table while ANY
+  # downstream module's state is locked — that scenario would corrupt
+  # cross-module coordination and require restoring from PITR.
+  deletion_protection_enabled = true
 }

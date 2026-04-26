@@ -121,9 +121,11 @@ immediately. Per ADR-010 §2.5 the console is read-only.
 
 ## Destroying (rare)
 
-`terraform destroy` only works after the operator has manually emptied
-the S3 bucket (versioned-bucket force-delete is intentionally NOT enabled
-on this resource — `force_destroy = false`). Procedure:
+`terraform destroy` only works after the operator has (1) manually
+emptied the S3 bucket and (2) flipped `deletion_protection_enabled` on
+the lock table to `false`. Both guards are intentional — the bucket has
+`force_destroy = false`, and the table is shielded by a deletion-
+protection flag, mirroring the bucket's posture. Procedure:
 
 ```bash
 # 1. Empty the bucket (every version of every object).
@@ -144,7 +146,13 @@ aws s3api list-object-versions \
       --bucket "$(terraform output -raw state_bucket_name)" \
       --delete file:///dev/stdin
 
-# 3. Now destroy.
+# 3. Disable lock-table deletion protection. Edit `main.tf` to set
+#    `deletion_protection_enabled = false` on `aws_dynamodb_table.lock`,
+#    then apply ONLY that change:
+$EDITOR main.tf
+terraform apply -target=aws_dynamodb_table.lock
+
+# 4. Now destroy.
 terraform destroy
 ```
 

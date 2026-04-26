@@ -63,15 +63,25 @@ bin/
 *.out
 
 # --- Terraform / IaC ---------------------------------------------------------
+# State, plan, and operator-supplied secrets stay local. Provider lockfile
+# (`.terraform.lock.hcl`) IS committed — it pins provider checksums for
+# reproducibility, per ADR-010 §2.2. The negation must come AFTER the
+# parent ignore that would otherwise match.
 .terraform/
 .terraform.lock.hcl
+!**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfplan
+*.tfvars
+!**/*.tfvars.example
 crash.log
 crash.*.log
 override.tf
 override.tf.json
+# Bootstrap-only artifacts: the operator's `terraform output -json` dump,
+# placed next to the bootstrap module after the first apply.
+**/bootstrap-outputs.json
 *_override.tf
 *_override.tf.json
 
@@ -143,21 +153,6 @@ playwright-report/
 .claude/settings.json
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
-
-# --- Terraform ---------------------------------------------------------------
-# Local state and lock files (the bootstrap module uses local state by
-# design; everything else uses the S3 backend, so these live only in
-# `infra/bootstrap/`). Plan output and CLI configs are also local.
-**/.terraform/
-**/*.tfstate
-**/*.tfstate.*
-**/*.tfplan
-**/*.tfvars
-!**/*.tfvars.example
-**/.terraform.lock.hcl.backup
-**/crash.log
-**/crash.*.log
-**/bootstrap-outputs.json
 
 # --- Misc --------------------------------------------------------------------
 tmp/

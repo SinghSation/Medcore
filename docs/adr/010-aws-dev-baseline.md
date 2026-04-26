@@ -94,11 +94,12 @@ Specific decisions this entails:
   operator, that creates the state bucket + lock table. From that point
   forward, every other Terraform project in the repo declares an `s3`
   backend pointing at the bootstrap-created bucket + table.
-- **Bootstrap state** is committed to the bootstrap directory itself
-  (`infra/bootstrap/terraform.tfstate`) and `.gitignore`d. Yes, this is
-  asymmetric — it has to be, because nothing exists to back it up the
-  first time. The bootstrap module is small, idempotent, and creates
-  resources whose deletion would not lose ongoing data.
+- **Bootstrap state** is stored locally next to the module
+  (`infra/bootstrap/terraform.tfstate`) and excluded from version
+  control via `.gitignore`. Yes, this is asymmetric — it has to be,
+  because nothing exists to back it up the first time. The bootstrap
+  module is small, idempotent, and creates resources whose deletion
+  would not lose ongoing data.
 - **State bucket:** `medcore-dev-tfstate-<account-id>` (account-id
   suffix to make name globally unique without coupling to brand).
   Versioned, encrypted (SSE-S3), public-access blocked, lifecycle to
@@ -107,7 +108,7 @@ Specific decisions this entails:
   `LockID`.
 
 ### 2.4 Module layout
-```
+```text
 infra/
 ├── bootstrap/                     # Chunk A: state backend (local state)
 │   ├── main.tf                    # S3 + DDB
@@ -246,6 +247,14 @@ monolithic, to keep blast radius small.
   module) until business need justifies.
 - No backup-restore drill schedule. Tracked as a Phase B
   operationalization item, not blocked by this ADR.
+- **Rollback (Chunk A):** the bootstrap is reversible via the
+  documented destroy procedure in `infra/bootstrap/README.md` (manual
+  bucket-empty + flip `deletion_protection_enabled` to `false` on the
+  lock table + `terraform destroy`). Subsequent chunks (B–F) ship
+  their own per-module destroy paths in their respective READMEs.
+  Any infra change introduced in a future chunk that is NOT
+  reversible MUST attach an explicit rollback plan to its ADR or
+  PR description before merge.
 
 ### 4.3 Operational discipline this codifies
 - **No console-driven changes.** Drift = build break.

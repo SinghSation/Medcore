@@ -32,6 +32,12 @@ variable "tags" {
   }
 }
 
+variable "allowed_account_ids" {
+  description = "AWS account IDs the bootstrap is allowed to apply against. Empty list disables the guard. Set this in `terraform.tfvars` after the first apply (when the operator knows the account ID) so subsequent runs fail fast if credentials resolve to the wrong account. ADR-010 §2.5 belt-and-suspenders."
+  type        = list(string)
+  default     = []
+}
+
 variable "noncurrent_version_expiration_days" {
   description = "After this many days, non-current versions of state objects are deleted from the state bucket. Default 90 — tradeoff between recovery window and storage cost."
   type        = number
