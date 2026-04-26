@@ -1,0 +1,33 @@
+# Example tfvars for the Terraform bootstrap project.
+#
+# Copy to `terraform.tfvars` (which is gitignored) before applying.
+# Most operators can leave the defaults — they match ADR-010 §2.1.
+#
+# Override here if the operator's account or naming convention differs.
+
+# AWS region for the state bucket + lock table. Single region; downstream
+# modules can deploy to other regions but their state still resolves
+# here.
+# aws_region = "us-east-1"
+
+# Resource-name prefix. Combined with the AWS account ID for the bucket
+# name. Default `medcore-dev` matches ADR-010 §2.1.
+# name_prefix = "medcore-dev"
+
+# Tags applied to every bootstrap-created resource. The defaults satisfy
+# AWS cost-allocation reporting; add organisation-specific tags here.
+# tags = {
+#   "medcore:env"        = "dev"
+#   "medcore:component"  = "tf-bootstrap"
+#   "medcore:managed-by" = "terraform"
+#   "medcore:adr"        = "ADR-010"
+# }
+
+# Days to retain non-current state-bucket versions before lifecycle
+# expiration. Default 90.
+# noncurrent_version_expiration_days = 90
+
+# Account-allowlist guard. After the first apply (when the account ID
+# is known), set this to the dev account ID so subsequent applies fail
+# fast if credentials accidentally resolve to a different account.
+# allowed_account_ids = ["123456789012"]
